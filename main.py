@@ -6,18 +6,18 @@ from collections import defaultdict
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton,
     InputMediaPhoto
 )
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8514017811:AAEK007dilGv0Etcvxp2HJhEMQ5npt22pps"
+TOKEN = "ТУТ_ТВОЙ_ТОКЕН"
 
 ADMIN_IDS = [724545647, 8390126598]
 CHANNEL_ID = "@blackrussia_85"
+
+CONTACT_ADMIN = "@onesever"
 
 SPAM_TIMEOUT = 600  # 10 минут
 
@@ -29,8 +29,8 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 
-lock = asyncio.Lock()
 albums = defaultdict(list)
+lock = asyncio.Lock()
 
 # ================= JSON =================
 def load_json(file):
@@ -46,8 +46,8 @@ def save_json(file, data):
 
 # ================= КЛАВИАТУРА =================
 user_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-user_kb.add("📢 Опубликовать объявление")
-user_kb.add("📖 Помощь", "📞 Связь с админом")
+user_kb.add(KeyboardButton("📢 Опубликовать объявление"))
+user_kb.add(KeyboardButton("📖 Помощь"), KeyboardButton("📞 Связь с админом"))
 
 # ================= АНТИСПАМ =================
 def check_spam(user_id):
@@ -76,30 +76,29 @@ async def start(message: types.Message):
 @dp.message_handler(lambda m: m.text == "📖 Помощь")
 async def help_msg(message: types.Message):
     await message.answer(
-        "📘 Пример:\n"
+        "📘 Пример объявления:\n\n"
         "1️⃣ Куплю / Продам\n"
         "2️⃣ Цена\n"
         "3️⃣ Связь — @username"
     )
 
 @dp.message_handler(lambda m: m.text == "📞 Связь с админом")
-async def contact(message: types.Message):
-    await message.answer("📬 Свяжитесь с администратором.")
+async def contact_admin(message: types.Message):
+    await message.answer(
+        f"📞 Связь с администратором:\n👉 {CONTACT_ADMIN}"
+    )
 
 @dp.message_handler(lambda m: m.text == "📢 Опубликовать объявление")
-async def publish(message: types.Message):
-    await message.answer("📝 Отправь текст или несколько фото с подписью.")
+async def publish_info(message: types.Message):
+    await message.answer(
+        "📝 Отправь текст или несколько фото с подписью."
+    )
 
 # ================= АЛЬБОМ =================
 @dp.message_handler(content_types=types.ContentType.PHOTO)
 async def handle_album(message: types.Message):
     if not message.media_group_id:
-        await handle_single(message)
-        return
-
-    ok, wait = check_spam(message.from_user.id)
-    if not ok:
-        await message.answer(f"⏳ Подожди {wait // 60} мин.")
+        await handle_text(message)
         return
 
     albums[message.media_group_id].append(message)
@@ -109,123 +108,127 @@ async def handle_album(message: types.Message):
     if not album:
         return
 
-    caption = album[0].caption or ""
-
-    media = []
-    for i, msg in enumerate(album):
-        media.append(
-            InputMediaPhoto(
-                media=msg.photo[-1].file_id,
-                caption=caption if i == 0 else None
-            )
-        )
-
-    kb = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("✅ Одобрить", callback_data="approve"),
-        InlineKeyboardButton("❌ Отклонить", callback_data="reject")
-    )
-
-    for admin in ADMIN_IDS:
-        sent = await bot.send_media_group(admin, media)
-        await bot.send_message(admin, "🆕 Объявление", reply_markup=kb)
-
-        pending = load_json(PENDING_FILE)
-        pending[str(sent[0].message_id)] = {
-            "type": "album",
-            "media": [m.media for m in media],
-            "caption": caption,
-            "from_id": message.from_user.id,
-            "status": "pending"
-        }
-        save_json(PENDING_FILE, pending)
-
-    await message.answer("✅ Отправлено на модерацию")
-
-# ================= ОДИНОЧНОЕ =================
-async def handle_single(message: types.Message):
     ok, wait = check_spam(message.from_user.id)
     if not ok:
         await message.answer(f"⏳ Подожди {wait // 60} мин.")
         return
 
-    payload = {
+    caption = album[0].caption or ""
+    post_id = str(int(time.time() * 1000))
+
+    media = [
+        InputMediaPhoto(
+            media=msg.photo[-1].file_id,
+            caption=caption if i == 0 else None
+        )
+        for i, msg in enumerate(album)
+    ]
+
+    kb = InlineKeyboardMarkup().add(
+        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{post_id}"),
+        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{post_id}")
+    )
+
+    pending = load_json(PENDING_FILE)
+    pending[post_id] = {
+        "type": "album",
+        "media": [m.media for m in media],
+        "caption": caption,
+        "from_id": message.from_user.id,
+        "status": "pending"
+    }
+    save_json(PENDING_FILE, pending)
+
+    for admin in ADMIN_IDS:
+        await bot.send_media_group(admin, media)
+        await bot.send_message(admin, "🆕 Объявление", reply_markup=kb)
+
+    await message.answer("✅ Объявление отправлено на модерацию!")
+
+# ================= ТЕКСТ =================
+@dp.message_handler(content_types=types.ContentType.TEXT)
+async def handle_text(message: types.Message):
+    if message.text.startswith("📢") or message.text.startswith("📖") or message.text.startswith("📞"):
+        return
+
+    ok, wait = check_spam(message.from_user.id)
+    if not ok:
+        await message.answer(f"⏳ Подожди {wait // 60} мин.")
+        return
+
+    post_id = str(int(time.time() * 1000))
+
+    kb = InlineKeyboardMarkup().add(
+        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{post_id}"),
+        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{post_id}")
+    )
+
+    pending = load_json(PENDING_FILE)
+    pending[post_id] = {
         "type": "text",
         "text": message.text,
         "from_id": message.from_user.id,
         "status": "pending"
     }
-
-    kb = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("✅ Одобрить", callback_data="approve"),
-        InlineKeyboardButton("❌ Отклонить", callback_data="reject")
-    )
+    save_json(PENDING_FILE, pending)
 
     for admin in ADMIN_IDS:
-        sent = await bot.send_message(admin, message.text, reply_markup=kb)
-        pending = load_json(PENDING_FILE)
-        pending[str(sent.message_id)] = payload
-        save_json(PENDING_FILE, pending)
+        await bot.send_message(admin, message.text, reply_markup=kb)
 
-    await message.answer("✅ Отправлено на модерацию")
-
-@dp.message_handler(content_types=types.ContentType.TEXT)
-async def handle_text(message: types.Message):
-    if message.text.startswith("📢") or message.text.startswith("📖") or message.text.startswith("📞"):
-        return
-    await handle_single(message)
+    await message.answer("✅ Объявление отправлено на модерацию!")
 
 # ================= МОДЕРАЦИЯ =================
-@dp.callback_query_handler(lambda c: c.data in ["approve", "reject"])
+@dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
 async def moderation(call: types.CallbackQuery):
+    action, post_id = call.data.split(":")
+    admin_name = call.from_user.full_name
+
     if call.from_user.id not in ADMIN_IDS:
         await call.answer("Нет прав", show_alert=True)
         return
 
-    msg_id = str(call.message.message_id)
-    admin_name = call.from_user.full_name
-
     async with lock:
         pending = load_json(PENDING_FILE)
-        payload = pending.get(msg_id)
+        payload = pending.get(post_id)
 
         if not payload or payload["status"] != "pending":
-            await call.answer("Уже обработано")
+            await call.answer("⚠️ Уже обработано")
             return
 
-        payload["status"] = "approved" if call.data == "approve" else "rejected"
+        payload["status"] = "approved" if action == "approve" else "rejected"
         payload["moderated_by"] = admin_name
-        pending[msg_id] = payload
+        pending[post_id] = payload
         save_json(PENDING_FILE, pending)
 
     if payload["status"] == "approved":
         if payload["type"] == "album":
-            media = []
-            for i, fid in enumerate(payload["media"]):
-                media.append(
-                    InputMediaPhoto(
-                        media=fid,
-                        caption=payload["caption"] if i == 0 else None
-                    )
+            media = [
+                InputMediaPhoto(
+                    media=fid,
+                    caption=payload["caption"] if i == 0 else None
                 )
+                for i, fid in enumerate(payload["media"])
+            ]
             await bot.send_media_group(CHANNEL_ID, media)
         else:
             await bot.send_message(CHANNEL_ID, payload["text"])
 
         await bot.send_message(
             payload["from_id"],
-            f"✅ Опубликовано\n👮 Администратор: {admin_name}"
+            f"✅ Ваше объявление опубликовано\n👮 Администратор: {admin_name}"
         )
-        status = f"✅ Одобрено\n👮 {admin_name}"
+
+        status_text = f"✅ Одобрено\n👮 {admin_name}"
     else:
         await bot.send_message(
             payload["from_id"],
-            f"❌ Отклонено\n👮 Администратор: {admin_name}"
+            f"❌ Ваше объявление отклонено\n👮 Администратор: {admin_name}"
         )
-        status = f"❌ Отклонено\n👮 {admin_name}"
+        status_text = f"❌ Отклонено\n👮 {admin_name}"
 
     for admin in ADMIN_IDS:
         try:
-            await bot.edit_message_text(status, admin, call.message.message_id)
+            await bot.edit_message_text(status_text, admin, call.message.message_id)
         except:
             pass
 
@@ -234,4 +237,5 @@ async def moderation(call: types.CallbackQuery):
 # ================= RUN =================
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
+
 
