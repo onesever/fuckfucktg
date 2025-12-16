@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+pending.json
+last_post.json
+venv/
