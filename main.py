@@ -12,7 +12,7 @@ from aiogram.types import (
 )
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8514017811:AAEK007dilGv0Etcvxp2HJhEMQ5npt22pps"
+TOKEN = "8514017811:AAGtCAgA908czP1THC-QFP__kGaoMjS68mY"
 
 ADMIN_IDS = [724545647, 8390126598]
 CHANNEL_ID = "@blackrussia_85"
