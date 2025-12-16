@@ -2,9 +2,11 @@ import logging
 import json
 import time
 import asyncio
-from collections import defaultdict
 
 from aiogram import Bot, Dispatcher, executor, types
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -12,26 +14,26 @@ from aiogram.types import (
 )
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8514017811:AAHF6XZ9xww5NBcscZWerRRb9NItFmTGZbQ"
+TOKEN = "8514017811:AAEv62jJ8--g7sIUeTf6C9c54wvQNlUPTqE"
 
 ADMIN_IDS = [724545647, 8390126598]
 CHANNEL_ID = "@blackrussia_85"
-
 CONTACT_ADMIN = "@onesever"
 
-SPAM_TIMEOUT = 600  # 10 минут
-
 PENDING_FILE = "pending.json"
-LAST_POST_FILE = "last_post.json"
 COUNTER_FILE = "counter.json"
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
-
-albums = defaultdict(list)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 lock = asyncio.Lock()
+
+# ================= FSM =================
+class AdForm(StatesGroup):
+    text = State()
+    photos = State()
 
 # ================= JSON =================
 def load_json(file):
@@ -52,76 +54,97 @@ def get_next_number():
     save_json(COUNTER_FILE, data)
     return num
 
-# ================= КЛАВИАТУРА =================
+# ================= КЛАВИАТУРЫ =================
 user_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-user_kb.add(KeyboardButton("📢 Опубликовать объявление"))
-user_kb.add(KeyboardButton("📖 Помощь"), KeyboardButton("📞 Связь с админом"))
+user_kb.add("📢 Опубликовать объявление")
+user_kb.add("📖 Помощь", "📞 Связь с админом")
 
-# ================= АНТИСПАМ =================
-def check_spam(user_id):
-    data = load_json(LAST_POST_FILE)
-    now = int(time.time())
-    last = data.get(str(user_id), 0)
+photo_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+photo_kb.add("📷 Добавить фото")
+photo_kb.add("🚫 Без фото")
 
-    if now - last < SPAM_TIMEOUT:
-        return False, SPAM_TIMEOUT - (now - last)
-
-    data[str(user_id)] = now
-    save_json(LAST_POST_FILE, data)
-    return True, 0
+finish_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+finish_kb.add("✅ Готово")
+finish_kb.add("🚫 Без фото")
 
 # ================= START =================
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     await message.answer(
         "👋 Привет!\n\n"
-        "Отправь объявление (текст или несколько фото с текстом).\n"
-        "Администратор проверит его перед публикацией.",
+        "Ты можешь подать объявление для публикации.",
         reply_markup=user_kb
     )
 
-# ================= КНОПКИ =================
-@dp.message_handler(lambda m: m.text == "📖 Помощь")
+@dp.message_handler(text="📖 Помощь")
 async def help_msg(message: types.Message):
     await message.answer(
-        "📘 Пример объявления:\n\n"
-        "1️⃣ Куплю / Продам\n"
-        "2️⃣ Цена\n"
-        "3️⃣ Связь — @username"
+        "📌 Как подать объявление:\n"
+        "1️⃣ Напиши текст\n"
+        "2️⃣ Добавь фото (по желанию)\n"
+        "3️⃣ Отправь на модерацию"
     )
 
-@dp.message_handler(lambda m: m.text == "📞 Связь с админом")
-async def contact_admin(message: types.Message):
+@dp.message_handler(text="📞 Связь с админом")
+async def contact(message: types.Message):
+    await message.answer(f"📞 Администратор: {CONTACT_ADMIN}")
+
+# ================= ПОДАЧА =================
+@dp.message_handler(text="📢 Опубликовать объявление")
+async def start_ad(message: types.Message):
+    await AdForm.text.set()
     await message.answer(
-        f"📞 Связь с администратором:\n👉 {CONTACT_ADMIN}"
+        "✏️ Напишите текст объявления",
+        reply_markup=types.ReplyKeyboardRemove()
     )
 
-@dp.message_handler(lambda m: m.text == "📢 Опубликовать объявление")
-async def publish_info(message: types.Message):
+@dp.message_handler(state=AdForm.text, content_types=types.ContentType.TEXT)
+async def get_text(message: types.Message, state: FSMContext):
+    await state.update_data(
+        text=message.text,
+        photos=[]
+    )
+    await AdForm.photos.set()
     await message.answer(
-        "📝 Отправь текст или несколько фото с подписью."
+        "📸 Добавьте фото к объявлению\n"
+        "Можно несколько\n"
+        "Или нажмите «Без фото»",
+        reply_markup=photo_kb
     )
 
-# ================= АЛЬБОМ =================
-@dp.message_handler(content_types=types.ContentType.PHOTO)
-async def handle_album(message: types.Message):
-    if not message.media_group_id:
-        await handle_text(message)
+@dp.message_handler(state=AdForm.photos, text="🚫 Без фото")
+async def no_photo(message: types.Message, state: FSMContext):
+    await send_to_moderation(message, state, with_photos=False)
+
+@dp.message_handler(state=AdForm.photos, text="📷 Добавить фото")
+async def ask_photo(message: types.Message):
+    await message.answer(
+        "📸 Отправляйте фото\n"
+        "Когда закончите — нажмите «Готово»",
+        reply_markup=finish_kb
+    )
+
+@dp.message_handler(state=AdForm.photos, content_types=types.ContentType.PHOTO)
+async def collect_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+
+@dp.message_handler(state=AdForm.photos, text="✅ Готово")
+async def finish_photos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("photos"):
+        await message.answer("❌ Вы не добавили фото\nИли нажмите «Без фото»")
         return
+    await send_to_moderation(message, state, with_photos=True)
 
-    albums[message.media_group_id].append(message)
-    await asyncio.sleep(1)
-
-    album = albums.pop(message.media_group_id, [])
-    if not album:
-        return
-
-    ok, wait = check_spam(message.from_user.id)
-    if not ok:
-        await message.answer(f"⏳ Подожди {wait // 60} мин.")
-        return
-
+# ================= ОТПРАВКА АДМИНАМ =================
+async def send_to_moderation(message, state, with_photos: bool):
+    data = await state.get_data()
     number = get_next_number()
+    post_id = str(int(time.time() * 1000))
+
     user = message.from_user
 
     header = (
@@ -131,17 +154,6 @@ async def handle_album(message: types.Message):
         f"🆔 ID: {user.id}"
     )
 
-    caption = album[0].caption or ""
-    post_id = str(int(time.time() * 1000))
-
-    media = [
-        InputMediaPhoto(
-            media=msg.photo[-1].file_id,
-            caption=caption if i == 0 else None
-        )
-        for i, msg in enumerate(album)
-    ]
-
     kb = InlineKeyboardMarkup().add(
         InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{post_id}"),
         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{post_id}")
@@ -150,74 +162,40 @@ async def handle_album(message: types.Message):
     pending = load_json(PENDING_FILE)
     pending[post_id] = {
         "number": number,
-        "type": "album",
-        "media": [m.media for m in media],
-        "caption": caption,
+        "text": data["text"],
+        "photos": data.get("photos", []),
         "from_id": user.id,
-        "from_name": user.full_name,
-        "from_username": user.username,
         "status": "pending"
     }
     save_json(PENDING_FILE, pending)
 
     for admin in ADMIN_IDS:
         await bot.send_message(admin, header)
-        await bot.send_media_group(admin, media)
+        await bot.send_message(admin, f"📝 Текст:\n\n{data['text']}")
+
+        if with_photos:
+            media = [
+                InputMediaPhoto(
+                    media=pid,
+                    caption=data["text"] if i == 0 else None
+                )
+                for i, pid in enumerate(data["photos"])
+            ]
+            await bot.send_media_group(admin, media)
+
         await bot.send_message(admin, "⬆️ Модерация", reply_markup=kb)
 
-    await message.answer(f"✅ Объявление №{number} отправлено на модерацию!")
-
-# ================= ТЕКСТ =================
-@dp.message_handler(content_types=types.ContentType.TEXT)
-async def handle_text(message: types.Message):
-    if message.text.startswith(("📢", "📖", "📞")):
-        return
-
-    ok, wait = check_spam(message.from_user.id)
-    if not ok:
-        await message.answer(f"⏳ Подожди {wait // 60} мин.")
-        return
-
-    number = get_next_number()
-    user = message.from_user
-
-    header = (
-        f"🆕 Объявление №{number}\n"
-        f"👤 {user.full_name}"
-        f"{f' (@{user.username})' if user.username else ''}\n"
-        f"🆔 ID: {user.id}"
+    await state.finish()
+    await message.answer(
+        f"✅ Объявление №{number} отправлено на модерацию",
+        reply_markup=user_kb
     )
-
-    post_id = str(int(time.time() * 1000))
-
-    kb = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{post_id}"),
-        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{post_id}")
-    )
-
-    pending = load_json(PENDING_FILE)
-    pending[post_id] = {
-        "number": number,
-        "type": "text",
-        "text": message.text,
-        "from_id": user.id,
-        "from_name": user.full_name,
-        "from_username": user.username,
-        "status": "pending"
-    }
-    save_json(PENDING_FILE, pending)
-
-    for admin in ADMIN_IDS:
-        await bot.send_message(admin, header)
-        await bot.send_message(admin, message.text, reply_markup=kb)
-
-    await message.answer(f"✅ Объявление №{number} отправлено на модерацию!")
 
 # ================= МОДЕРАЦИЯ =================
 @dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
 async def moderation(call: types.CallbackQuery):
     action, post_id = call.data.split(":")
-    admin_name = call.from_user.full_name
+    admin = call.from_user.full_name
 
     if call.from_user.id not in ADMIN_IDS:
         await call.answer("Нет прав", show_alert=True)
@@ -225,50 +203,47 @@ async def moderation(call: types.CallbackQuery):
 
     async with lock:
         pending = load_json(PENDING_FILE)
-        payload = pending.get(post_id)
+        post = pending.get(post_id)
 
-        if not payload or payload["status"] != "pending":
+        if not post or post["status"] != "pending":
             await call.answer("⚠️ Уже обработано")
             return
 
-        payload["status"] = "approved" if action == "approve" else "rejected"
-        payload["moderated_by"] = admin_name
-        pending[post_id] = payload
+        post["status"] = "approved" if action == "approve" else "rejected"
+        post["moderated_by"] = admin
+        pending[post_id] = post
         save_json(PENDING_FILE, pending)
 
-    number = payload["number"]
+    number = post["number"]
 
-    if payload["status"] == "approved":
-        if payload["type"] == "album":
+    if post["status"] == "approved":
+        if post["photos"]:
             media = [
                 InputMediaPhoto(
-                    media=fid,
-                    caption=payload["caption"] if i == 0 else None
+                    media=pid,
+                    caption=post["text"] if i == 0 else None
                 )
-                for i, fid in enumerate(payload["media"])
+                for i, pid in enumerate(post["photos"])
             ]
             await bot.send_media_group(CHANNEL_ID, media)
         else:
-            await bot.send_message(CHANNEL_ID, payload["text"])
+            await bot.send_message(CHANNEL_ID, post["text"])
 
         await bot.send_message(
-            payload["from_id"],
-            f"✅ Объявление №{number} опубликовано\n"
-            f"👮 Администратор: {admin_name}"
+            post["from_id"],
+            f"✅ Объявление №{number} опубликовано\n👮 {admin}"
         )
-
-        status_text = f"✅ Объявление №{number} одобрено\n👮 {admin_name}"
+        status = f"✅ Объявление №{number} одобрено\n👮 {admin}"
     else:
         await bot.send_message(
-            payload["from_id"],
-            f"❌ Объявление №{number} отклонено\n"
-            f"👮 Администратор: {admin_name}"
+            post["from_id"],
+            f"❌ Объявление №{number} отклонено\n👮 {admin}"
         )
-        status_text = f"❌ Объявление №{number} отклонено\n👮 {admin_name}"
+        status = f"❌ Объявление №{number} отклонено\n👮 {admin}"
 
-    for admin in ADMIN_IDS:
+    for admin_id in ADMIN_IDS:
         try:
-            await bot.edit_message_text(status_text, admin, call.message.message_id)
+            await bot.edit_message_text(status, admin_id, call.message.message_id)
         except:
             pass
 
