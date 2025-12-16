@@ -12,7 +12,7 @@ from aiogram.types import (
 )
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8514017811:AAGtCAgA908czP1THC-QFP__kGaoMjS68mY"
+TOKEN = "8514017811:AAHF6XZ9xww5NBcscZWerRRb9NItFmTGZbQ"
 
 ADMIN_IDS = [724545647, 8390126598]
 CHANNEL_ID = "@blackrussia_85"
@@ -23,6 +23,7 @@ SPAM_TIMEOUT = 600  # 10 минут
 
 PENDING_FILE = "pending.json"
 LAST_POST_FILE = "last_post.json"
+COUNTER_FILE = "counter.json"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -43,6 +44,13 @@ def load_json(file):
 def save_json(file, data):
     with open(file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+def get_next_number():
+    data = load_json(COUNTER_FILE)
+    num = data.get("last", 0) + 1
+    data["last"] = num
+    save_json(COUNTER_FILE, data)
+    return num
 
 # ================= КЛАВИАТУРА =================
 user_kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -113,6 +121,16 @@ async def handle_album(message: types.Message):
         await message.answer(f"⏳ Подожди {wait // 60} мин.")
         return
 
+    number = get_next_number()
+    user = message.from_user
+
+    header = (
+        f"🆕 Объявление №{number}\n"
+        f"👤 {user.full_name}"
+        f"{f' (@{user.username})' if user.username else ''}\n"
+        f"🆔 ID: {user.id}"
+    )
+
     caption = album[0].caption or ""
     post_id = str(int(time.time() * 1000))
 
@@ -131,30 +149,44 @@ async def handle_album(message: types.Message):
 
     pending = load_json(PENDING_FILE)
     pending[post_id] = {
+        "number": number,
         "type": "album",
         "media": [m.media for m in media],
         "caption": caption,
-        "from_id": message.from_user.id,
+        "from_id": user.id,
+        "from_name": user.full_name,
+        "from_username": user.username,
         "status": "pending"
     }
     save_json(PENDING_FILE, pending)
 
     for admin in ADMIN_IDS:
+        await bot.send_message(admin, header)
         await bot.send_media_group(admin, media)
-        await bot.send_message(admin, "🆕 Объявление", reply_markup=kb)
+        await bot.send_message(admin, "⬆️ Модерация", reply_markup=kb)
 
-    await message.answer("✅ Объявление отправлено на модерацию!")
+    await message.answer(f"✅ Объявление №{number} отправлено на модерацию!")
 
 # ================= ТЕКСТ =================
 @dp.message_handler(content_types=types.ContentType.TEXT)
 async def handle_text(message: types.Message):
-    if message.text.startswith("📢") or message.text.startswith("📖") or message.text.startswith("📞"):
+    if message.text.startswith(("📢", "📖", "📞")):
         return
 
     ok, wait = check_spam(message.from_user.id)
     if not ok:
         await message.answer(f"⏳ Подожди {wait // 60} мин.")
         return
+
+    number = get_next_number()
+    user = message.from_user
+
+    header = (
+        f"🆕 Объявление №{number}\n"
+        f"👤 {user.full_name}"
+        f"{f' (@{user.username})' if user.username else ''}\n"
+        f"🆔 ID: {user.id}"
+    )
 
     post_id = str(int(time.time() * 1000))
 
@@ -165,17 +197,21 @@ async def handle_text(message: types.Message):
 
     pending = load_json(PENDING_FILE)
     pending[post_id] = {
+        "number": number,
         "type": "text",
         "text": message.text,
-        "from_id": message.from_user.id,
+        "from_id": user.id,
+        "from_name": user.full_name,
+        "from_username": user.username,
         "status": "pending"
     }
     save_json(PENDING_FILE, pending)
 
     for admin in ADMIN_IDS:
+        await bot.send_message(admin, header)
         await bot.send_message(admin, message.text, reply_markup=kb)
 
-    await message.answer("✅ Объявление отправлено на модерацию!")
+    await message.answer(f"✅ Объявление №{number} отправлено на модерацию!")
 
 # ================= МОДЕРАЦИЯ =================
 @dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
@@ -200,6 +236,8 @@ async def moderation(call: types.CallbackQuery):
         pending[post_id] = payload
         save_json(PENDING_FILE, pending)
 
+    number = payload["number"]
+
     if payload["status"] == "approved":
         if payload["type"] == "album":
             media = [
@@ -215,16 +253,18 @@ async def moderation(call: types.CallbackQuery):
 
         await bot.send_message(
             payload["from_id"],
-            f"✅ Ваше объявление опубликовано\n👮 Администратор: {admin_name}"
+            f"✅ Объявление №{number} опубликовано\n"
+            f"👮 Администратор: {admin_name}"
         )
 
-        status_text = f"✅ Одобрено\n👮 {admin_name}"
+        status_text = f"✅ Объявление №{number} одобрено\n👮 {admin_name}"
     else:
         await bot.send_message(
             payload["from_id"],
-            f"❌ Ваше объявление отклонено\n👮 Администратор: {admin_name}"
+            f"❌ Объявление №{number} отклонено\n"
+            f"👮 Администратор: {admin_name}"
         )
-        status_text = f"❌ Отклонено\n👮 {admin_name}"
+        status_text = f"❌ Объявление №{number} отклонено\n👮 {admin_name}"
 
     for admin in ADMIN_IDS:
         try:
@@ -237,5 +277,3 @@ async def moderation(call: types.CallbackQuery):
 # ================= RUN =================
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
-
-
