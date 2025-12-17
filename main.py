@@ -12,7 +12,7 @@ from aiogram.utils import executor
 
 # ================== НАСТРОЙКИ ==================
 
-TOKEN = "8514017811:AAFCXcQHVjZsY_cwrKo-qi9NkvasDtBdfbo"
+TOKEN = "8514017811:AAEsYCKjAdbjz907KD0O_mY-eKQPEN5iD4Y"
 CHANNEL_ID = -1001234567890   # ID канала с -100
 
 OWNER_USERNAME = "@onesever"
