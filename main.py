@@ -1,11 +1,17 @@
 import logging
 import time
 from aiogram import Bot, Dispatcher, executor, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import (
+    ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton,
+    InputMediaPhoto
+)
 
 # ================== НАСТРОЙКИ ==================
 
-TOKEN = "8514017811:AAEgZ5V_8mX4vzw2FGhI-En-rzgZN5O5LiQ"
+TOKEN = "8514017811:AAFKyBdlLjHTVlF1ql5Axe2WUZx2l9lgnFg"
 CHANNEL_ID = "@blackrussia_85"
 
 OWNER_USERNAME = "@onesever"
@@ -22,17 +28,32 @@ ANTISPAM_SECONDS = 2 * 60 * 60  # 2 часа
 # ================== INIT ==================
 
 logging.basicConfig(level=logging.INFO)
-
 bot = Bot(token=TOKEN, parse_mode="HTML")
-dp = Dispatcher(bot)
+dp = Dispatcher(bot, storage=MemoryStorage())
 
-# ================== ХРАНИЛИЩА ==================
+# ================== ХРАНЕНИЕ ==================
 
-users = set()
-last_post_time = {}
-pending_ads = {}
-processed_ads = {}
+last_post_time = {}      # user_id -> timestamp
+pending_ads = {}         # ad_id -> data
+processed_ads = {}       # ad_id -> moderator_id
 ad_counter = 0
+
+# ================== FSM ==================
+
+class AdForm(StatesGroup):
+    text = State()
+    ask_photo = State()
+    photos = State()
+    confirm = State()
+
+# ================== ВСПОМОГАТЕЛЬНОЕ ==================
+
+def format_time(seconds: int) -> str:
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0:
+        return f"{hours} ч {minutes} мин"
+    return f"{minutes} мин"
 
 # ================== КЛАВИАТУРЫ ==================
 
@@ -41,25 +62,34 @@ main_kb.add("📢 Опубликовать объявление")
 main_kb.add("📖 Помощь", "📞 Связь с владельцем")
 main_kb.add("👮 Модераторы")
 
+ask_photo_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+ask_photo_kb.add("➕ Добавить фото", "➡️ Без фото")
+
+photo_done_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+photo_done_kb.add("✅ Готово")
+
 confirm_kb = InlineKeyboardMarkup()
 confirm_kb.add(
-    InlineKeyboardButton("✅ Одобрить", callback_data="approve"),
-    InlineKeyboardButton("❌ Отклонить", callback_data="reject")
+    InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+    InlineKeyboardButton("❌ Отменить", callback_data="cancel")
 )
 
-def format_time(sec):
-    h = sec // 3600
-    m = (sec % 3600) // 60
-    return f"{h} ч {m} мин" if h > 0 else f"{m} мин"
+def moderation_kb(ad_id: int):
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{ad_id}"),
+        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{ad_id}")
+    )
+    return kb
 
 # ================== START ==================
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
-    users.add(message.from_user.id)
     await message.answer(
         "👋 Добро пожаловать!\n\n"
-        "Здесь можно подать объявление для публикации.",
+        "Здесь вы можете подать объявление для публикации.\n"
+        "Все объявления проходят модерацию.",
         reply_markup=main_kb
     )
 
@@ -71,8 +101,10 @@ async def help_msg(message: types.Message):
         "📌 <b>Как подать объявление</b>\n\n"
         "1️⃣ Нажмите «Опубликовать объявление»\n"
         "2️⃣ Отправьте текст\n"
-        "3️⃣ Дождитесь модерации\n\n"
-        "⏳ 1 объявление раз в 2 часа"
+        "3️⃣ Выберите: с фото или без\n"
+        "4️⃣ Проверьте предпросмотр\n"
+        "5️⃣ Подтвердите\n\n"
+        "⏳ Ограничение: 1 объявление раз в 2 часа"
     )
 
 @dp.message_handler(text="📞 Связь с владельцем")
@@ -80,137 +112,202 @@ async def owner(message: types.Message):
     await message.answer(f"👑 Владелец: {OWNER_USERNAME}")
 
 @dp.message_handler(text="👮 Модераторы")
-async def mods(message: types.Message):
+async def mods_list(message: types.Message):
     await message.answer(
-        "👮 <b>Модераторы</b>\n\n"
-        "👑 Владелец:\n@onesever\n\n"
+        "👮 <b>Модераторы проекта</b>\n\n"
+        "👑 Владелец:\n• @onesever\n\n"
         "🛡 Модераторы:\n"
-        "@creatorr13\n"
-        "@krasnov_hub\n"
-        "@wrezx"
+        "• @creatorr13\n"
+        "• @krasnov_hub\n"
+        "• @wrezx"
     )
 
-# ================== ПОДАЧА ОБЪЯВЛЕНИЯ ==================
+# ================== ПОДАЧА ==================
 
 @dp.message_handler(text="📢 Опубликовать объявление")
-async def publish(message: types.Message):
-    users.add(message.from_user.id)
-
-    now = time.time()
+async def start_ad(message: types.Message):
     uid = message.from_user.id
+    now = time.time()
 
     if uid in last_post_time:
         diff = int(now - last_post_time[uid])
         if diff < ANTISPAM_SECONDS:
+            left = ANTISPAM_SECONDS - diff
             await message.answer(
-                f"⏳ Повторная подача через {format_time(ANTISPAM_SECONDS - diff)}"
+                f"⏳ Вы уже отправляли объявление.\n"
+                f"Попробуйте снова через {format_time(left)}"
             )
             return
 
     await message.answer(
-        "✍️ Отправьте текст объявления\n\n"
+        "✍️ <b>Отправьте текст объявления</b>\n\n"
         "Пример:\n"
-        "1) Продам: Дом\n"
+        "1) Продам: Дом в Бусаево\n"
         "2) Цена: 11.000.000\n"
-        "3) Связь: @username",
+        "3) Связь: @username\n\n"
+        "<i>Фото добавляются на следующем шаге</i>",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    await AdForm.text.set()
+
+@dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
+async def get_text(message: types.Message, state: FSMContext):
+    await state.update_data(text=message.text, photos=[])
+    await message.answer(
+        "📸 Хотите добавить фото к объявлению?",
+        reply_markup=ask_photo_kb
+    )
+    await AdForm.ask_photo.set()
+
+@dp.message_handler(state=AdForm.ask_photo, text="➡️ Без фото")
+async def no_photo(message: types.Message, state: FSMContext):
+    await show_preview(message, state)
+
+@dp.message_handler(state=AdForm.ask_photo, text="➕ Добавить фото")
+async def add_photo(message: types.Message, state: FSMContext):
+    await message.answer(
+        "📸 Отправьте фото (можно несколько)\n"
+        "Когда закончите — нажмите «Готово»",
+        reply_markup=photo_done_kb
+    )
+    await AdForm.photos.set()
+
+@dp.message_handler(state=AdForm.photos, content_types=types.ContentTypes.PHOTO)
+async def get_photos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+
+@dp.message_handler(state=AdForm.photos, text="✅ Готово")
+async def finish_photos(message: types.Message, state: FSMContext):
+    await show_preview(message, state)
+
+# ================== ПРЕДПРОСМОТР ==================
+
+async def show_preview(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    text = data["text"]
+    photos = data.get("photos", [])
+
+    await message.answer(
+        "🔍 <b>Предпросмотр объявления</b>",
         reply_markup=types.ReplyKeyboardRemove()
     )
 
-# ================== ПОЛУЧЕНИЕ ТЕКСТА ==================
+    if photos:
+        media = [InputMediaPhoto(photos[0], caption=text)]
+        for p in photos[1:]:
+            media.append(InputMediaPhoto(p))
+        await bot.send_media_group(message.chat.id, media)
+    else:
+        await message.answer(text)
 
-@dp.message_handler(content_types=types.ContentTypes.TEXT)
-async def get_ad(message: types.Message):
-    users.add(message.from_user.id)
+    await message.answer(
+        "❗ Проверьте объявление.\n"
+        "Подтвердите отправку или отмените.",
+        reply_markup=confirm_kb
+    )
+    await AdForm.confirm.set()
 
-    if message.text.startswith("/"):
-        return
+# ================== ПОДТВЕРЖДЕНИЕ ==================
 
+@dp.callback_query_handler(text="confirm", state=AdForm.confirm)
+async def confirm_send(call: types.CallbackQuery, state: FSMContext):
     global ad_counter
     ad_counter += 1
     ad_id = ad_counter
 
+    data = await state.get_data()
+    user = call.from_user
+
     pending_ads[ad_id] = {
-        "text": message.text,
-        "user_id": message.from_user.id,
-        "username": message.from_user.username
+        "user": user,
+        "text": data["text"],
+        "photos": data.get("photos", [])
     }
 
-    text = (
-        f"🆕 <b>Объявление №{ad_id}</b>\n"
-        f"👤 @{message.from_user.username} | ID {message.from_user.id}\n\n"
-        f"{message.text}"
+    caption = (
+        f"🆕 <b>Объявление №{ad_id}</b>\n\n"
+        f"👤 {user.full_name} (@{user.username})\n"
+        f"🆔 ID: {user.id}\n\n"
+        f"{data['text']}"
     )
 
     for mid in MODERATORS:
-        await bot.send_message(mid, text, reply_markup=confirm_kb)
+        if data["photos"]:
+            media = [InputMediaPhoto(data["photos"][0], caption=caption)]
+            for p in data["photos"][1:]:
+                media.append(InputMediaPhoto(p))
+            await bot.send_media_group(mid, media)
+            await bot.send_message(mid, "⬆️ Модерация", reply_markup=moderation_kb(ad_id))
+        else:
+            await bot.send_message(mid, caption, reply_markup=moderation_kb(ad_id))
 
-    last_post_time[message.from_user.id] = time.time()
+    last_post_time[user.id] = time.time()
+    await state.finish()
+    await call.message.answer("✅ Объявление отправлено на модерацию")
+    await call.answer()
 
-    await message.answer("✅ Объявление отправлено на модерацию", reply_markup=main_kb)
+@dp.callback_query_handler(text="cancel", state=AdForm.confirm)
+async def cancel_send(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await call.message.answer("❌ Подача объявления отменена")
+    await call.answer()
 
 # ================== МОДЕРАЦИЯ ==================
 
-@dp.callback_query_handler(lambda c: c.data in ["approve", "reject"])
+@dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
 async def moderate(call: types.CallbackQuery):
-    if call.from_user.id not in MODERATORS:
+    uid = call.from_user.id
+    if uid not in MODERATORS:
+        await call.answer("Нет прав", show_alert=True)
         return
 
-    ad_id = list(pending_ads.keys())[-1]
+    action, ad_id_str = call.data.split(":")
+    ad_id = int(ad_id_str)
 
     if ad_id in processed_ads:
-        await call.answer("⚠️ Уже обработано", show_alert=True)
+        await call.answer(
+            f"⚠️ Объявление №{ad_id} уже обработано\n"
+            f"👮 Модератор: {processed_ads[ad_id]}",
+            show_alert=True
+        )
         return
 
-    ad = pending_ads[ad_id]
+    ad = pending_ads.get(ad_id)
+    if not ad:
+        await call.answer("Ошибка", show_alert=True)
+        return
+
     processed_ads[ad_id] = call.from_user.full_name
 
-    if call.data == "approve":
-        await bot.send_message(CHANNEL_ID, ad["text"])
-        await bot.send_message(ad["user_id"], f"✅ Объявление №{ad_id} опубликовано")
-        status = "ОДОБРЕНО"
+    if action == "approve":
+        if ad["photos"]:
+            media = [InputMediaPhoto(ad["photos"][0], caption=ad["text"])]
+            for p in ad["photos"][1:]:
+                media.append(InputMediaPhoto(p))
+            await bot.send_media_group(CHANNEL_ID, media)
+        else:
+            await bot.send_message(CHANNEL_ID, ad["text"])
+
+        await bot.send_message(ad["user"].id, f"✅ Ваше объявление №{ad_id} опубликовано!")
+        result = "ОДОБРЕНО"
     else:
-        await bot.send_message(ad["user_id"], f"❌ Объявление №{ad_id} отклонено")
-        status = "ОТКЛОНЕНО"
+        await bot.send_message(ad["user"].id, f"❌ Ваше объявление №{ad_id} отклонено.")
+        result = "ОТКЛОНЕНО"
 
     for mid in MODERATORS:
         await bot.send_message(
             mid,
-            f"📌 Объявление №{ad_id} {status}\n"
-            f"👮 {call.from_user.full_name}"
+            f"📌 Объявление №{ad_id} {result}\n"
+            f"👮 Модератор: {call.from_user.full_name}"
         )
 
     await call.message.edit_reply_markup()
     await call.answer("Готово")
 
-# ================== USERS / BROADCAST ==================
-
-@dp.message_handler(commands=["users"])
-async def users_cmd(message: types.Message):
-    if message.from_user.id not in MODERATORS:
-        return
-    await message.answer(f"👥 Пользователей в боте: <b>{len(users)}</b>")
-
-@dp.message_handler(commands=["broadcast"])
-async def broadcast(message: types.Message):
-    if message.from_user.id not in MODERATORS:
-        return
-
-    text = message.get_args()
-    if not text:
-        await message.answer("❗ /broadcast текст")
-        return
-
-    ok = bad = 0
-    for uid in users:
-        try:
-            await bot.send_message(uid, text)
-            ok += 1
-        except:
-            bad += 1
-
-    await message.answer(f"📣 Рассылка завершена\n✅ {ok}\n❌ {bad}")
-
-# ================== RUN ==================
+# ================== ЗАПУСК ==================
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
