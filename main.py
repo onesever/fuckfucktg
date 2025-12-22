@@ -118,7 +118,6 @@ async def mods_list(message: types.Message):
         "🛡 Модераторы:\n"
         "• @creatorr13\n"
         "• @krasnov_hub\n"
-        "• @wrezx"
     )
 
 # ================== ПОДАЧА ==================
