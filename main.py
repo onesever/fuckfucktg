@@ -153,17 +153,20 @@ async def start_ad(message: types.Message):
                 reply_markup=main_kb
             )
             return
-await message.answer(
-    "✍️ <b>Подача объявления</b>\n\n"
-    "Отправьте <b>текст объявления</b> одним сообщением.\n\n"
-    "📌 <b>Пример:</b>\n"
-    "Продам дом в Бусаево\n"
-    "Цена: 17кк\n"
-    "Связь: @username\n\n"
-    "⚠️ <b>ФОТО ДОБАВЛЯЮТСЯ НА СЛЕДУЮЩЕМ ШАГЕ!</b>",
-    reply_markup=types.ReplyKeyboardRemove()
-)
+
+    await message.answer(
+        "✍️ <b>Подача объявления</b>\n\n"
+        "Отправьте <b>текст объявления</b> одним сообщением.\n\n"
+        "📌 <b>Пример:</b>\n"
+        "Продам дом в Бусаево\n"
+        "Цена: 17кк\n"
+        "Связь: @username\n\n"
+        "⚠️ <b>ФОТО ДОБАВЛЯЮТСЯ НА СЛЕДУЮЩЕМ ШАГЕ!</b>",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+
     await AdForm.text.set()
+
 @dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
 async def get_text(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text, photos=[])
