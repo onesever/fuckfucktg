@@ -164,7 +164,6 @@ async def start_ad(message: types.Message):
     "⚠️ <b>ФОТО ДОБАВЛЯЮТСЯ НА СЛЕДУЮЩЕМ ШАГЕ!!!</b>",
     reply_markup=types.ReplyKeyboardRemove()
 )
-    )
     await AdForm.text.set()
 
 @dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
