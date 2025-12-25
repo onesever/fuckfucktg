@@ -164,7 +164,6 @@ await message.answer(
     reply_markup=types.ReplyKeyboardRemove()
 )
     await AdForm.text.set()
-
 @dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
 async def get_text(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text, photos=[])
