@@ -41,10 +41,13 @@ dp = Dispatcher(bot, storage=MemoryStorage())
 
 users = set()
 
+if not os.path.exists(USERS_FILE):
+    open(USERS_FILE, "a").close()
+
 def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
-            for line in f:
+    with open(USERS_FILE, "r") as f:
+        for line in f:
+            if line.strip().isdigit():
                 users.add(int(line.strip()))
 
 def save_user(user_id: int):
@@ -108,34 +111,6 @@ async def start(message: types.Message):
         reply_markup=main_kb
     )
 
-# ================== ИНФО ==================
-
-@dp.message_handler(text="📖 Помощь")
-async def help_msg(message: types.Message):
-    await message.answer(
-        "📌 <b>Как подать объявление</b>\n\n"
-        "1️⃣ Нажмите «Опубликовать объявление»\n"
-        "2️⃣ Напишите текст\n"
-        "3️⃣ Добавьте фото (до 5)\n"
-        "4️⃣ Подтвердите\n\n"
-        "⏳ 1 объявление раз в 2 часа",
-        reply_markup=main_kb
-    )
-
-@dp.message_handler(text="📞 Связь с владельцем")
-async def owner(message: types.Message):
-    await message.answer(f"👑 Владелец: {OWNER_USERNAME}", reply_markup=main_kb)
-
-@dp.message_handler(text="👮 Модераторы")
-async def mods(message: types.Message):
-    await message.answer(
-        "👮 <b>Модераторы</b>\n\n"
-        "👑 @onesever\n"
-        "🛡 @creatorr13\n"
-        "🛡 @krasnov_hub",
-        reply_markup=main_kb
-    )
-
 # ================== ПОДАЧА ==================
 
 @dp.message_handler(text="📢 Опубликовать объявление")
@@ -155,15 +130,15 @@ async def start_ad(message: types.Message):
             return
 
     await message.answer(
-    "✍️ <b>Подача объявления</b>\n\n"
-    "Отправьте <b>текст объявления</b> одним сообщением.\n\n"
-    "📌 Пример:\n"
-    "Продам дом в Бусаево\n"
-    "Цена: 17кк\n"
-    "Связь: @username\n\n"
-    "⚠️ <b>ФОТО ДОБАВЛЯЮТСЯ НА СЛЕДУЮЩЕМ ШАГЕ!!!</b>",
-    reply_markup=types.ReplyKeyboardRemove()
-)
+        "✍️ <b>Подача объявления</b>\n\n"
+        "Отправьте <b>текст объявления</b> одним сообщением.\n\n"
+        "📌 Пример:\n"
+        "Продам дом в Бусаево\n"
+        "Цена: 17кк\n"
+        "Связь: @username\n\n"
+        "⚠️ <b>ФОТО ДОБАВЛЯЮТСЯ НА СЛЕДУЮЩЕМ ШАГЕ!</b>",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
     await AdForm.text.set()
 
 @dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
@@ -180,7 +155,7 @@ async def no_photo(message: types.Message, state: FSMContext):
 async def add_photo(message: types.Message, state: FSMContext):
     await message.answer(
         "📸 Отправьте до 5 фото.\n"
-        "После 5 фото предпросмотр откроется автоматически.",
+        "⚠️ Если отправите больше — придётся отправить заново.",
         reply_markup=types.ReplyKeyboardRemove()
     )
     await AdForm.photos.set()
@@ -193,7 +168,8 @@ async def get_photos(message: types.Message, state: FSMContext):
     if len(photos) >= MAX_PHOTOS:
         await state.update_data(photos=[])
         await message.answer(
-            "❌ Максимум 5 фото.\nОтправьте фото заново."
+            "❌ <b>Максимум 5 фото.</b>\n"
+            "Фото сброшены, отправьте заново."
         )
         return
 
@@ -277,68 +253,12 @@ async def cancel(call: types.CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
-# ================== МОДЕРАЦИЯ ==================
-
-@dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
-async def moderate(call: types.CallbackQuery):
-    if call.from_user.id not in MODERATORS:
-        return
-
-    action, ad_id = call.data.split(":")
-    ad_id = int(ad_id)
-
-    if ad_id in processed_ads:
-        await call.answer("Уже обработано", show_alert=True)
-        return
-
-    ad = pending_ads.get(ad_id)
-    if not ad:
-        return
-
-    processed_ads[ad_id] = call.from_user.full_name
-
-    if action == "approve":
-        if ad["photos"]:
-            media = [InputMediaPhoto(ad["photos"][0], caption=ad["text"])]
-            for p in ad["photos"][1:]:
-                media.append(InputMediaPhoto(p))
-            await bot.send_media_group(CHANNEL_ID, media)
-        else:
-            await bot.send_message(CHANNEL_ID, ad["text"])
-        await bot.send_message(ad["user"].id, f"✅ Объявление №{ad_id} опубликовано")
-    else:
-        await bot.send_message(ad["user"].id, f"❌ Объявление №{ad_id} отклонено")
-
-    await call.message.edit_reply_markup()
-    await call.answer("Готово")
-
-# ================== СЕРВИС ==================
+# ================== USERS ==================
 
 @dp.message_handler(commands=["users"])
 async def users_cmd(message: types.Message):
     if message.from_user.id == OWNER_ID:
         await message.answer(f"👥 Пользователей: {len(users)}")
-
-@dp.message_handler(commands=["broadcast"])
-async def broadcast(message: types.Message):
-    if message.from_user.id != OWNER_ID:
-        return
-
-    text = message.get_args()
-    if not text:
-        await message.answer("❌ Напиши текст после команды")
-        return
-
-    sent = 0
-    for uid in list(users):
-        try:
-            await bot.send_message(uid, text)
-            sent += 1
-            await asyncio.sleep(0.05)
-        except:
-            pass
-
-    await message.answer(f"✅ Рассылка отправлена: {sent}")
 
 # ================== ЗАПУСК ==================
 
