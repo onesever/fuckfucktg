@@ -3,5 +3,4 @@ __pycache__/
 *.pyc
 pending.json
 last_post.json
-users.txt
 venv/
