@@ -65,9 +65,6 @@ main_kb.add("👮 Модераторы")
 ask_photo_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 ask_photo_kb.add("➕ Добавить фото", "➡️ Без фото")
 
-photo_done_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-photo_done_kb.add("✅ Готово")
-
 confirm_kb = InlineKeyboardMarkup().add(
     InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
     InlineKeyboardButton("❌ Отменить", callback_data="cancel")
@@ -153,11 +150,11 @@ async def no_photo(message: types.Message, state: FSMContext):
     await show_preview(message, state)
 
 @dp.message_handler(state=AdForm.ask_photo, text="➕ Добавить фото")
-async def add_photo(message: types.Message):
+async def add_photo(message: types.Message, state: FSMContext):
     await message.answer(
-        f"📸 Отправьте до {MAX_PHOTOS} фото\n"
-        "Нажмите «Готово», когда закончите",
-        reply_markup=photo_done_kb
+        "📸 Отправьте до 5 фото.\n"
+        "Когда будет 5 — предпросмотр откроется автоматически.",
+        reply_markup=types.ReplyKeyboardRemove()
     )
     await AdForm.photos.set()
 
@@ -167,15 +164,18 @@ async def get_photos(message: types.Message, state: FSMContext):
     photos = data.get("photos", [])
 
     if len(photos) >= MAX_PHOTOS:
-        await message.answer(f"❌ Максимум {MAX_PHOTOS} фото")
+        await state.update_data(photos=[])
+        await message.answer(
+            "❌ Максимум 5 фото.\n"
+            "Отправьте фото заново."
+        )
         return
 
     photos.append(message.photo[-1].file_id)
     await state.update_data(photos=photos)
 
-@dp.message_handler(state=AdForm.photos, text="✅ Готово")
-async def finish_photos(message: types.Message, state: FSMContext):
-    await show_preview(message, state)
+    if len(photos) == MAX_PHOTOS:
+        await show_preview(message, state)
 
 # ================== ПРЕДПРОСМОТР ==================
 
@@ -236,13 +236,19 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
 
     last_post_time[user.id] = time.time()
     await state.finish()
-    await call.message.answer("✅ Отправлено на модерацию", reply_markup=main_kb)
+    await call.message.answer(
+        "✅ Объявление отправлено на модерацию",
+        reply_markup=main_kb
+    )
     await call.answer()
 
 @dp.callback_query_handler(text="cancel", state=AdForm.confirm)
 async def cancel(call: types.CallbackQuery, state: FSMContext):
     await state.finish()
-    await call.message.answer("❌ Отменено", reply_markup=main_kb)
+    await call.message.answer(
+        "❌ Подача объявления отменена",
+        reply_markup=main_kb
+    )
     await call.answer()
 
 # ================== МОДЕРАЦИЯ ==================
@@ -315,7 +321,7 @@ async def broadcast(message: types.Message):
         except:
             pass
 
-    await message.answer(f"✅ Рассылка: {sent}")
+    await message.answer(f"✅ Рассылка отправлена: {sent}")
 
 # ================== ЗАПУСК ==================
 
