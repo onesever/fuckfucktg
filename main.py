@@ -140,7 +140,7 @@ async def mods(message: types.Message):
         "👑 @onesever\n"
         "🛡️ @creatorr13\n"
         "🛡 @krasnov_hub\n"
-        "🛡️ @wrezx"\n"
+        "🛡️ @wrezx\n"
         "🛡️ @qwixx_am\n"
         "🛡️ @Judoholikk\n"
         "🛡️ @ANDREYDUDUII", 
