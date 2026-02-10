@@ -26,6 +26,8 @@ MODERATORS = [
     7244927531,
     8390126598,
     6077303991,
+    7573908814,
+    6621231808,
 ]
 
 ANTISPAM_SECONDS = 2 * 60 * 60
@@ -139,7 +141,9 @@ async def mods(message: types.Message):
         "🛡️ @creatorr13\n"
         "🛡 @krasnov_hub\n"
         "🛡️ @wrezx\n"
-        "🛡️ @qwixx_am", 
+        "🛡️ @qwixx_am\n"
+        "🛡️ @sqw1rtit\n"
+        "🛡️ @MensClub4",
         reply_markup=main_kb
     )
 
