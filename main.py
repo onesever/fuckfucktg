@@ -22,7 +22,6 @@ OWNER_USERNAME = "@onesever"
 
 MODERATORS = [
     724545647,
-    7946280692,
     7244927531,
     8390126598,
     6077303991,
@@ -139,7 +138,6 @@ async def mods(message: types.Message):
         "👮 <b>Модераторы</b>\n\n"
         "👑 @onesever\n"
         "🛡️ @creatorr13\n"
-        "🛡 @krasnov_hub\n"
         "🛡️ @wrezx\n"
         "🛡️ @qwixx_am\n"
         "🛡️ @sqw1rtit\n"
