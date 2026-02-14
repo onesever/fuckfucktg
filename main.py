@@ -16,6 +16,7 @@ from aiogram.types import (
 
 TOKEN = "8514017811:AAFKyBdlLjHTVlF1ql5Axe2WUZx2l9lgnFg"
 CHANNEL_ID = "@blackrussia_85"
+
 OWNER_ID = 724545647
 OWNER_USERNAME = "@onesever"
 
@@ -170,7 +171,7 @@ async def mods(message: types.Message):
         reply_markup=main_kb
     )
 
-# ================== SUBMIT ==================
+# ================== ПОДАЧА ==================
 
 @dp.message_handler(text="📢 Опубликовать объявление")
 async def start_ad(message: types.Message):
@@ -197,10 +198,113 @@ async def start_ad(message: types.Message):
 
     await message.answer(
         "✍️ <b>Подача объявления</b>\n\n"
-        "Отправьте <b>текст объявления</b> одним сообщением.",
+        "Отправьте <b>текст объявления</b> одним сообщением.\n\n"
+        "📌 <b>Пример:</b>\n"
+        "Продам дом в Бусаево\n"
+        "Цена: 17кк\n"
+        "Связь: @username\n\n"
+        "⚠️ <b>ФОТО ДОБАВЛЯЮТСЯ НА СЛЕДУЮЩЕМ ШАГЕ!</b>",
         reply_markup=types.ReplyKeyboardRemove()
     )
     await AdForm.text.set()
+
+@dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
+async def get_text(message: types.Message, state: FSMContext):
+    await state.update_data(text=message.text, photos=[])
+    await message.answer("📸 Хотите добавить фото?", reply_markup=ask_photo_kb)
+    await AdForm.ask_photo.set()
+
+@dp.message_handler(state=AdForm.ask_photo, text="➡️ Без фото")
+async def no_photo(message: types.Message, state: FSMContext):
+    await show_preview(message, state)
+
+@dp.message_handler(state=AdForm.ask_photo, text="➕ Добавить фото")
+async def add_photo(message: types.Message):
+    await message.answer(
+        "📸 Отправьте до 5 фото.\nПосле отправки нажмите «Готово».",
+        reply_markup=photo_done_kb
+    )
+    await AdForm.photos.set()
+
+@dp.message_handler(state=AdForm.photos, content_types=types.ContentTypes.PHOTO)
+async def get_photos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+
+    if len(photos) < MAX_PHOTOS:
+        photos.append(message.photo[-1].file_id)
+        await state.update_data(photos=photos)
+
+@dp.message_handler(state=AdForm.photos, text="✅ Готово")
+async def photos_done(message: types.Message, state: FSMContext):
+    await show_preview(message, state)
+
+# ================== ПРЕДПРОСМОТР ==================
+
+async def show_preview(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+
+    await message.answer("🔍 <b>Предпросмотр</b>")
+
+    if data["photos"]:
+        media = [InputMediaPhoto(data["photos"][0], caption=data["text"])]
+        for p in data["photos"][1:]:
+            media.append(InputMediaPhoto(p))
+        await bot.send_media_group(message.chat.id, media)
+    else:
+        await message.answer(data["text"])
+
+    await message.answer("Подтвердите:", reply_markup=confirm_kb)
+    await AdForm.confirm.set()
+
+# ================== ПОДТВЕРЖДЕНИЕ ==================
+
+@dp.callback_query_handler(text="confirm", state=AdForm.confirm)
+async def confirm(call: types.CallbackQuery, state: FSMContext):
+    global ad_counter
+
+    await call.message.edit_reply_markup(reply_markup=None)
+
+    ad_counter += 1
+    ad_id = ad_counter
+
+    data = await state.get_data()
+    user = call.from_user
+
+    pending_ads[ad_id] = {
+        "user": user,
+        "text": data["text"],
+        "photos": data["photos"]
+    }
+
+    caption = (
+        f"🆕 <b>Объявление №{ad_id}</b>\n"
+        f"👤 {user.full_name} (@{user.username})\n"
+        f"🆔 {user.id}\n\n"
+        f"{data['text']}"
+    )
+
+    for mid in MODERATORS:
+        if data["photos"]:
+            media = [InputMediaPhoto(data["photos"][0], caption=caption)]
+            for p in data["photos"][1:]:
+                media.append(InputMediaPhoto(p))
+            await bot.send_media_group(mid, media)
+            await bot.send_message(mid, "⬆️ Модерация", reply_markup=moderation_kb(ad_id))
+        else:
+            await bot.send_message(mid, caption, reply_markup=moderation_kb(ad_id))
+
+    last_post_time[user.id] = time.time()
+    await state.finish()
+    await call.message.answer("✅ Объявление отправлено на модерацию", reply_markup=main_kb)
+    await call.answer()
+
+@dp.callback_query_handler(text="cancel", state=AdForm.confirm)
+async def cancel(call: types.CallbackQuery, state: FSMContext):
+    await call.message.edit_reply_markup(reply_markup=None)
+    await state.finish()
+    await call.message.answer("❌ Отменено", reply_markup=main_kb)
+    await call.answer()
 
 # ================== RUN ==================
 
