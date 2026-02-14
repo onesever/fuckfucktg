@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# ================== ПРОВЕРКА ПОДПИСКИ ==================
+# ================== ПОДПИСКА ==================
 
 async def check_subscription(user_id: int) -> bool:
     try:
@@ -299,12 +299,83 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("✅ Объявление отправлено на модерацию", reply_markup=main_kb)
     await call.answer()
 
-@dp.callback_query_handler(text="cancel", state=AdForm.confirm)
-async def cancel(call: types.CallbackQuery, state: FSMContext):
+# ================== МОДЕРАЦИЯ ==================
+
+@dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
+async def moderate(call: types.CallbackQuery):
+    if call.from_user.id not in MODERATORS:
+        await call.answer("⛔ Нет доступа", show_alert=True)
+        return
+
+    action, ad_id = call.data.split(":")
+    ad_id = int(ad_id)
+
+    if ad_id in processed_ads:
+        await call.answer("⚠ Уже обработано другим модератором", show_alert=True)
+        return
+
+    ad = pending_ads.get(ad_id)
+    if not ad:
+        await call.answer("❌ Объявление не найдено", show_alert=True)
+        return
+
+    processed_ads[ad_id] = call.from_user.full_name
+
+    if action == "approve":
+        if ad["photos"]:
+            media = [InputMediaPhoto(ad["photos"][0], caption=ad["text"])]
+            for p in ad["photos"][1:]:
+                media.append(InputMediaPhoto(p))
+            await bot.send_media_group(CHANNEL_ID, media)
+        else:
+            await bot.send_message(CHANNEL_ID, ad["text"])
+
+        await bot.send_message(ad["user"].id, f"✅ Объявление №{ad_id} опубликовано")
+        status = "✅ ОДОБРЕНО"
+    else:
+        await bot.send_message(ad["user"].id, f"❌ Объявление №{ad_id} отклонено")
+        status = "❌ ОТКЛОНЕНО"
+
+    for mid in MODERATORS:
+        try:
+            await bot.send_message(
+                mid,
+                f"📌 Объявление №{ad_id} {status}\n"
+                f"👮 Модератор: {call.from_user.full_name}"
+            )
+        except:
+            pass
+
     await call.message.edit_reply_markup(reply_markup=None)
-    await state.finish()
-    await call.message.answer("❌ Отменено", reply_markup=main_kb)
-    await call.answer()
+    await call.answer("Готово")
+
+# ================== SERVICE ==================
+
+@dp.message_handler(commands=["users"])
+async def users_cmd(message: types.Message):
+    if message.from_user.id == OWNER_ID:
+        await message.answer(f"👥 Пользователей: {len(users)}")
+
+@dp.message_handler(commands=["broadcast"])
+async def broadcast(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    text = message.get_args()
+    if not text:
+        await message.answer("❌ Напиши текст после команды")
+        return
+
+    sent = 0
+    for uid in list(users):
+        try:
+            await bot.send_message(uid, text)
+            sent += 1
+            await asyncio.sleep(0.05)
+        except:
+            pass
+
+    await message.answer(f"✅ Отправлено: {sent}")
 
 # ================== RUN ==================
 
