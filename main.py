@@ -4,12 +4,9 @@ import sqlite3
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.types import (
-    ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton,
-    InputMediaPhoto
-)
+from aiogram.dispatcher import FSMContext
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8514017811:AAFKyBdlLjHTVlF1ql5Axe2WUZx2l9lgnFg"
@@ -19,11 +16,11 @@ BOT_USERNAME = "blackrussia85_bot"
 
 OWNER_ID = 724545647
 MODERATORS_IDS = [
-    5743211958,  # Bob1na
-    6077303991,  # qwixx_am
+    5743211958,   # Bob1na
+    6077303991,   # qwixx_am
     6621231808,  # MensClub4
-    7244927531,  # creatorr13
-    8390126598,  # wrezx
+    7244927531,   # creatorr13
+    8390126598,   # wrezx
 ]
 
 MAX_PHOTOS = 5
@@ -35,7 +32,6 @@ dp = Dispatcher(bot, storage=MemoryStorage())
 # ================== DATABASE ==================
 conn = sqlite3.connect("database.db")
 cursor = conn.cursor()
-
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -106,13 +102,12 @@ async def check_subscription(user_id):
     except:
         return False
 
-# ================== СТАРТ И ПРОВЕРКА ПОДПИСКИ ==================
+# ================== СТАРТ И ПОДПИСКА ==================
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     args = message.get_args()
     referrer = int(args) if args.isdigit() else None
 
-    # Добавляем пользователя в базу, если его нет
     cursor.execute("SELECT * FROM users WHERE user_id=?", (message.from_user.id,))
     user = cursor.fetchone()
     if not user:
@@ -125,7 +120,6 @@ async def start(message: types.Message):
             cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id=?", (referrer,))
             conn.commit()
     else:
-        # Обновляем username
         cursor.execute("UPDATE users SET username=? WHERE user_id=?", (message.from_user.username, message.from_user.id))
         conn.commit()
 
@@ -149,6 +143,9 @@ async def i_subscribed(message: types.Message):
 # ================== РЕФЕРАЛЫ ==================
 @dp.message_handler(text="🎁 Рефералы")
 async def referrals(message: types.Message):
+    cursor.execute("UPDATE users SET username=? WHERE user_id=?", (message.from_user.username, message.from_user.id))
+    conn.commit()
+
     cursor.execute("SELECT referrals FROM users WHERE user_id=?", (message.from_user.id,))
     refs = cursor.fetchone()[0]
 
@@ -158,9 +155,13 @@ async def referrals(message: types.Message):
     top = cursor.fetchall()
 
     top_text = ""
-    for i, user in enumerate(top, start=1):
-        uname = user[2] if user[2] else str(user[0])
-        top_text += f"{i}. @{uname} — {user[1]} людей\n"
+    for i in range(5):
+        if i < len(top):
+            user = top[i]
+            uname = user[2] if user[2] else str(user[0])
+            top_text += f"{i+1}. @{uname} — {user[1]} людей\n"
+        else:
+            top_text += f"{i+1}.\n"
 
     rules = (
         "📌 Правила реферальной системы:\n"
@@ -266,7 +267,9 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
     cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user.id,))
     refs = cursor.fetchone()[0]
     badge = "\n⭐ Топ селлер" if refs >= 100 else ""
-    caption = f"🆕 Объявление №{ad_id}{badge}\n\n{data['text']}"
+
+    author = f"@{user.username}" if user.username else str(user.id)
+    caption = f"🆕 Объявление №{ad_id}{badge}\nОт: {author}\n\n{data['text']}"
 
     pending_ads[ad_id] = {"user": user, "text": caption, "photos": data["photos"]}
 
