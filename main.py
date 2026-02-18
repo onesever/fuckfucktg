@@ -18,14 +18,12 @@ CHANNEL_LINK = "https://t.me/blackrussia_85"
 BOT_USERNAME = "blackrussia85_bot"
 
 OWNER_ID = 724545647
-OWNER_USERNAME = "@onesever"
-
-MODERATORS = [
-    "@Bob1na",
-    "@qwixx_am",
-    "@MensClub4",
-    "@creatorr13",
-    "@wrezx",
+MODERATORS_IDS = [
+    5743211958,  # Bob1na
+    6077303991,  # qwixx_am
+    6621231808,  # MensClub4
+    7244927531,  # creatorr13
+    8390126598,  # wrezx
 ]
 
 MAX_PHOTOS = 5
@@ -42,6 +40,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     referrer INTEGER,
+    username TEXT DEFAULT '',
     referrals INTEGER DEFAULT 0,
     last_post INTEGER DEFAULT 0
 )
@@ -111,22 +110,24 @@ async def check_subscription(user_id):
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     args = message.get_args()
-    referrer = None
+    referrer = int(args) if args.isdigit() else None
 
-    if args.isdigit():
-        referrer = int(args)
-
-    # --- Добавляем пользователя в базу, если его нет ---
+    # Добавляем пользователя в базу, если его нет
     cursor.execute("SELECT * FROM users WHERE user_id=?", (message.from_user.id,))
     user = cursor.fetchone()
     if not user:
-        cursor.execute("INSERT INTO users (user_id, referrer) VALUES (?, ?)",
-                       (message.from_user.id, referrer))
+        cursor.execute(
+            "INSERT INTO users (user_id, referrer, username) VALUES (?, ?, ?)",
+            (message.from_user.id, referrer, message.from_user.username)
+        )
         conn.commit()
         if referrer and referrer != message.from_user.id:
-            cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id=?",
-                           (referrer,))
+            cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id=?", (referrer,))
             conn.commit()
+    else:
+        # Обновляем username
+        cursor.execute("UPDATE users SET username=? WHERE user_id=?", (message.from_user.username, message.from_user.id))
+        conn.commit()
 
     if not await check_subscription(message.from_user.id):
         kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -143,7 +144,7 @@ async def i_subscribed(message: types.Message):
     else:
         kb = ReplyKeyboardMarkup(resize_keyboard=True)
         kb.add("📢 Подписаться", "✅ Я подписался")
-        await message.answer("❌ Вы ещё не подписаны на канал. Подпишитесь, чтобы пользоваться ботом.", reply_markup=kb)
+        await message.answer("❌ Вы ещё не подписаны на канал.", reply_markup=kb)
 
 # ================== РЕФЕРАЛЫ ==================
 @dp.message_handler(text="🎁 Рефералы")
@@ -153,24 +154,20 @@ async def referrals(message: types.Message):
 
     level, cooldown = get_level(refs)
 
-    cursor.execute("SELECT user_id, referrals FROM users ORDER BY referrals DESC LIMIT 5")
+    cursor.execute("SELECT user_id, referrals, username FROM users ORDER BY referrals DESC LIMIT 5")
     top = cursor.fetchall()
 
     top_text = ""
     for i, user in enumerate(top, start=1):
-        try:
-            chat = await bot.get_chat(user[0])
-            username = f"@{chat.username}" if chat.username else user[0]
-        except:
-            username = user[0]
-        top_text += f"{i}. {username} — {user[1]} людей\n"
+        uname = user[2] if user[2] else str(user[0])
+        top_text += f"{i}. @{uname} — {user[1]} людей\n"
 
     rules = (
         "📌 Правила реферальной системы:\n"
         "— Новичок 👤: <30 приглашённых — КД 150 минут\n"
         "— Активный селлер 🔥: 30–99 приглашённых — КД 90 минут\n"
         "— Топ селлер 🏆: 100+ приглашённых — КД 30 минут\n"
-        "Для получения уровня учитываются только реальные люди."
+        "Учитываются только реальные люди."
     )
 
     await message.answer(
@@ -187,21 +184,21 @@ async def referrals(message: types.Message):
 # ================== ПОДАЧА ОБЪЯВЛЕНИЯ ==================
 @dp.message_handler(text="📢 Опубликовать объявление")
 async def start_ad(message: types.Message):
-    # --- Добавляем пользователя в базу, если его нет ---
     cursor.execute("SELECT * FROM users WHERE user_id=?", (message.from_user.id,))
     user = cursor.fetchone()
     if not user:
-        cursor.execute("INSERT INTO users (user_id) VALUES (?)", (message.from_user.id,))
+        cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (message.from_user.id, message.from_user.username))
+        conn.commit()
+    else:
+        cursor.execute("UPDATE users SET username=? WHERE user_id=?", (message.from_user.username, message.from_user.id))
         conn.commit()
 
-    # --- Проверка подписки ---
     if not await check_subscription(message.from_user.id):
         await message.answer("❗ Подпишитесь на канал.")
         return
 
     cursor.execute("SELECT referrals, last_post FROM users WHERE user_id=?", (message.from_user.id,))
     refs, last_post = cursor.fetchone()
-
     level, cooldown = get_level(refs)
     now = int(time.time())
     if now - last_post < cooldown:
@@ -271,24 +268,18 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
     badge = "\n⭐ Топ селлер" if refs >= 100 else ""
     caption = f"🆕 Объявление №{ad_id}{badge}\n\n{data['text']}"
 
-    pending_ads[ad_id] = {
-        "user": user,
-        "text": caption,
-        "photos": data["photos"]
-    }
+    pending_ads[ad_id] = {"user": user, "text": caption, "photos": data["photos"]}
 
-    moderators_with_owner = MODERATORS + [OWNER_USERNAME]
-    for mod in moderators_with_owner:
+    for mid in MODERATORS_IDS + [OWNER_ID]:
         try:
-            mid = await bot.get_chat(mod)
             if data["photos"]:
                 media = [InputMediaPhoto(data["photos"][0], caption=caption)]
                 for p in data["photos"][1:]:
                     media.append(InputMediaPhoto(p))
-                await bot.send_media_group(mid.id, media)
-                await bot.send_message(mid.id, "⬆️ Модерация", reply_markup=moderation_kb(ad_id))
+                await bot.send_media_group(mid, media)
+                await bot.send_message(mid, "⬆️ Модерация", reply_markup=moderation_kb(ad_id))
             else:
-                await bot.send_message(mid.id, caption, reply_markup=moderation_kb(ad_id))
+                await bot.send_message(mid, caption, reply_markup=moderation_kb(ad_id))
         except:
             continue
 
@@ -298,17 +289,10 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("✅ Отправлено на модерацию", reply_markup=main_kb)
     await call.answer()
 
-@dp.callback_query_handler(text="cancel", state=AdForm.confirm)
-async def cancel(call: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    await call.message.delete()
-    await call.message.answer("❌ Отменено", reply_markup=main_kb)
-    await call.answer()
-
 # ================== МОДЕРАЦИЯ ==================
 @dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
 async def moderate(call: types.CallbackQuery):
-    if call.from_user.username not in MODERATORS and call.from_user.id != OWNER_ID:
+    if call.from_user.id not in MODERATORS_IDS and call.from_user.id != OWNER_ID:
         return
 
     action, ad_id = call.data.split(":")
@@ -334,11 +318,9 @@ async def moderate(call: types.CallbackQuery):
         else:
             await bot.send_message(CHANNEL_USERNAME, ad["text"])
 
-    moderators_with_owner = MODERATORS + [OWNER_USERNAME]
-    for mod in moderators_with_owner:
+    for mid in MODERATORS_IDS + [OWNER_ID]:
         try:
-            mid = await bot.get_chat(mod)
-            await bot.send_message(mid.id, f"📌 Объявление №{ad_id} {status}\n👮 {call.from_user.full_name}")
+            await bot.send_message(mid, f"📌 Объявление №{ad_id} {status}\n👮 {call.from_user.full_name}")
         except:
             continue
 
@@ -348,24 +330,27 @@ async def moderate(call: types.CallbackQuery):
         pass
 
     await call.message.edit_reply_markup()
-    await call.answer("Готово")
+    await call.answer()
 
 # ================== ДОПОЛНИТЕЛЬНЫЕ КНОПКИ ==================
 @dp.message_handler(text="👮 Модераторы")
 async def show_moderators(message: types.Message):
-    admins = {OWNER_USERNAME: "Владелец 👑"}
-    for mod in MODERATORS:
-        admins[mod] = "Модератор"
-
+    admins = {
+        "@onesever": "Владелец 👑",
+        "@Bob1na": "Модератор",
+        "@qwixx_am": "Модератор",
+        "@MensClub4": "Модератор",
+        "@creatorr13": "Модератор",
+        "@wrezx": "Модератор"
+    }
     text = "<b>Список модераторов и владельца:</b>\n\n"
-    for username, role in admins.items():
-        text += f"👤 {username} — {role}\n"
+    for uname, role in admins.items():
+        text += f"👤 {uname} — {role}\n"
     await message.answer(text, reply_markup=main_kb)
 
 @dp.message_handler(text="📞 Связь с владельцем")
 async def contact_owner(message: types.Message):
-    await message.answer(f"📬 Связь с владельцем:\n\n👑 Владелец: {OWNER_USERNAME}\nВы можете написать ему напрямую в Telegram.",
-                         reply_markup=main_kb)
+    await message.answer(f"📬 Связь с владельцем:\n\n👑 Владелец: @onesever\nВы можете написать ему напрямую в Telegram.", reply_markup=main_kb)
 
 # ================== BROADCAST ==================
 @dp.message_handler(commands=["broadcast"])
@@ -373,7 +358,6 @@ async def start_broadcast(message: types.Message):
     if message.from_user.id != OWNER_ID:
         await message.answer("❌ Только владелец может использовать эту команду.")
         return
-
     await message.answer("✉️ Отправьте текст рассылки для всех пользователей:")
     await BroadcastForm.message.set()
 
@@ -401,7 +385,6 @@ async def count_users(message: types.Message):
     if message.from_user.id != OWNER_ID:
         await message.answer("❌ Только владелец может использовать эту команду.")
         return
-
     cursor.execute("SELECT COUNT(*) FROM users")
     total = cursor.fetchone()[0]
     await message.answer(f"👥 Всего пользователей в боте: {total}")
