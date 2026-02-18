@@ -153,6 +153,7 @@ async def referrals(message: types.Message):
 
     cursor.execute("SELECT referrals FROM users WHERE user_id=?", (message.from_user.id,))
     refs = cursor.fetchone()[0]
+
     level, cooldown = get_level(refs)
 
     cursor.execute("SELECT username, referrals FROM users ORDER BY referrals DESC LIMIT 5")
@@ -261,11 +262,9 @@ async def show_preview(message, state):
 @dp.callback_query_handler(text="confirm", state=AdForm.confirm)
 async def confirm(call: types.CallbackQuery, state: FSMContext):
     global ad_counter
-
     data = await state.get_data()
     user = call.from_user
 
-    # Проверка на дубликаты, если нужно
     for ad in pending_ads.values():
         if ad["user"].id == user.id and ad["text"] == data["text"]:
             await call.answer("❌ Вы уже отправили такое объявление на модерацию.", show_alert=True)
@@ -274,11 +273,9 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
 
     ad_counter += 1
     ad_id = ad_counter
-
     cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user.id,))
     refs = cursor.fetchone()[0]
     badge = "\n⭐ Топ селлер" if refs >= 100 else ""
-
     author = f"@{user.username}" if user.username else str(user.id)
     caption = f"🆕 Объявление №{ad_id}{badge}\nОт: {author}\n\n{data['text']}"
 
@@ -297,7 +294,7 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
         except:
             continue
 
-    # Для канала публикуем только текст без номера и автора
+    # В канал только текст без автора и номера
     if data["photos"]:
         media = [InputMediaPhoto(data["photos"][0], caption=data["text"])]
         for p in data["photos"][1:]:
@@ -320,7 +317,6 @@ async def moderate(call: types.CallbackQuery):
 
     action, ad_id = call.data.split(":")
     ad_id = int(ad_id)
-
     if ad_id in processed_ads:
         await call.answer("Уже обработано", show_alert=True)
         return
@@ -389,7 +385,6 @@ async def broadcast_send(message: types.Message, state: FSMContext):
     text_to_send = message.text
     cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
-
     success = 0
     failed = 0
     for user in users:
@@ -398,11 +393,10 @@ async def broadcast_send(message: types.Message, state: FSMContext):
             success += 1
         except:
             failed += 1
-
     await message.answer(f"📤 Рассылка завершена.\n✅ Успешно: {success}\n❌ Не доставлено: {failed}")
     await state.finish()
 
-# ================== КОМАНДА /USERS ==================
+# ================== /USERS ==================
 @dp.message_handler(commands=["users"])
 async def count_users(message: types.Message):
     if message.from_user.id != OWNER_ID:
