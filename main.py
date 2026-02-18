@@ -18,7 +18,7 @@ OWNER_ID = 724545647
 MODERATORS_IDS = [
     5743211958,   # Bob1na
     6077303991,   # qwixx_am
-    6621231808,  # MensClub4
+    6621231808,  # MensClub4 реальный айди
     7244927531,   # creatorr13
     8390126598,   # wrezx
 ]
@@ -141,25 +141,28 @@ async def i_subscribed(message: types.Message):
         await message.answer("❌ Вы ещё не подписаны на канал.", reply_markup=kb)
 
 # ================== РЕФЕРАЛЫ ==================
-@dp.message_handler(text="🎁 Рефералы")
+@dp.message_handler(lambda message: message.text == "🎁 Рефералы")
 async def referrals(message: types.Message):
-    cursor.execute("UPDATE users SET username=? WHERE user_id=?", (message.from_user.username, message.from_user.id))
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (message.from_user.id,))
+    user = cursor.fetchone()
+    if not user:
+        cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (message.from_user.id, message.from_user.username))
+    else:
+        cursor.execute("UPDATE users SET username=? WHERE user_id=?", (message.from_user.username, message.from_user.id))
     conn.commit()
 
     cursor.execute("SELECT referrals FROM users WHERE user_id=?", (message.from_user.id,))
     refs = cursor.fetchone()[0]
-
     level, cooldown = get_level(refs)
 
-    cursor.execute("SELECT user_id, referrals, username FROM users ORDER BY referrals DESC LIMIT 5")
+    cursor.execute("SELECT username, referrals FROM users ORDER BY referrals DESC LIMIT 5")
     top = cursor.fetchall()
 
     top_text = ""
     for i in range(5):
         if i < len(top):
-            user = top[i]
-            uname = user[2] if user[2] else str(user[0])
-            top_text += f"{i+1}. @{uname} — {user[1]} людей\n"
+            uname = top[i][0] if top[i][0] else "Неизвестно"
+            top_text += f"{i+1}. @{uname} — {top[i][1]} людей\n"
         else:
             top_text += f"{i+1}.\n"
 
@@ -258,11 +261,19 @@ async def show_preview(message, state):
 @dp.callback_query_handler(text="confirm", state=AdForm.confirm)
 async def confirm(call: types.CallbackQuery, state: FSMContext):
     global ad_counter
-    ad_counter += 1
-    ad_id = ad_counter
 
     data = await state.get_data()
     user = call.from_user
+
+    # Проверка на дубликаты, если нужно
+    for ad in pending_ads.values():
+        if ad["user"].id == user.id and ad["text"] == data["text"]:
+            await call.answer("❌ Вы уже отправили такое объявление на модерацию.", show_alert=True)
+            await state.finish()
+            return
+
+    ad_counter += 1
+    ad_id = ad_counter
 
     cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user.id,))
     refs = cursor.fetchone()[0]
@@ -285,6 +296,15 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
                 await bot.send_message(mid, caption, reply_markup=moderation_kb(ad_id))
         except:
             continue
+
+    # Для канала публикуем только текст без номера и автора
+    if data["photos"]:
+        media = [InputMediaPhoto(data["photos"][0], caption=data["text"])]
+        for p in data["photos"][1:]:
+            media.append(InputMediaPhoto(p))
+        await bot.send_media_group(CHANNEL_USERNAME, media)
+    else:
+        await bot.send_message(CHANNEL_USERNAME, data["text"])
 
     cursor.execute("UPDATE users SET last_post=? WHERE user_id=?", (int(time.time()), user.id))
     conn.commit()
