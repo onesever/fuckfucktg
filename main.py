@@ -187,7 +187,6 @@ async def mods(message: types.Message):
 
 @dp.message_handler(text="📢 Опубликовать объявление")
 async def start_ad(message: types.Message):
-
     if not await check_subscription(message.from_user.id):
         await message.answer(
             "❌ Для подачи объявления нужно подписаться на канал.",
@@ -223,7 +222,6 @@ async def start_ad(message: types.Message):
 
 @dp.message_handler(state=AdForm.text, content_types=types.ContentTypes.TEXT)
 async def get_text(message: types.Message, state: FSMContext):
-
     user = message.from_user
     text = message.text
 
@@ -245,6 +243,71 @@ async def get_text(message: types.Message, state: FSMContext):
     await state.update_data(text=text, photos=[])
     await message.answer("📸 Хотите добавить фото?", reply_markup=ask_photo_kb)
     await AdForm.ask_photo.set()
+
+# ================== ОБРАБОТКА ФОТО ==================
+
+@dp.message_handler(state=AdForm.ask_photo, text="➡️ Без фото")
+async def skip_photos(message: types.Message, state: FSMContext):
+    await message.answer(
+        "✅ Текст получен. Подтвердите объявление.",
+        reply_markup=confirm_kb
+    )
+    await AdForm.confirm.set()
+
+@dp.message_handler(state=AdForm.ask_photo, text="➕ Добавить фото")
+async def add_photos(message: types.Message, state: FSMContext):
+    await message.answer(
+        "📸 Отправьте фото одно за другим. Когда закончите — нажмите ✅ Готово.",
+        reply_markup=photo_done_kb
+    )
+    await AdForm.photos.set()
+
+@dp.message_handler(state=AdForm.photos, content_types=types.ContentTypes.PHOTO)
+async def get_photos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+
+    if len(photos) >= MAX_PHOTOS:
+        await message.answer(f"❌ Максимум {MAX_PHOTOS} фото!")
+        return
+
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+    await message.answer(f"✅ Фото добавлено ({len(photos)}/{MAX_PHOTOS})", reply_markup=photo_done_kb)
+
+@dp.message_handler(state=AdForm.photos, text="✅ Готово")
+async def done_photos(message: types.Message, state: FSMContext):
+    await message.answer("✅ Подтвердите объявление.", reply_markup=confirm_kb)
+    await AdForm.confirm.set()
+
+# ================== ПОДТВЕРЖДЕНИЕ ==================
+
+@dp.callback_query_handler(lambda c: c.data in ["confirm", "cancel"], state=AdForm.confirm)
+async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    
+    if call.data == "cancel":
+        await call.message.edit_text("❌ Подача объявления отменена.", reply_markup=main_kb)
+        await state.finish()
+        return
+
+    text = data.get("text")
+    photos = data.get("photos", [])
+
+    try:
+        if photos:
+            media = [InputMediaPhoto(media=p, caption=text if i == 0 else "") for i, p in enumerate(photos)]
+            await bot.send_media_group(CHANNEL_ID, media)
+        else:
+            await bot.send_message(CHANNEL_ID, text)
+    except Exception as e:
+        await call.message.edit_text(f"❌ Ошибка при отправке объявления: {e}", reply_markup=main_kb)
+        await state.finish()
+        return
+
+    last_post_time[call.from_user.id] = time.time()
+    await call.message.edit_text("✅ Объявление отправлено!", reply_markup=main_kb)
+    await state.finish()
 
 # ================== RUN ==================
 
