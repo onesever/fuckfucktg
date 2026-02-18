@@ -15,7 +15,7 @@ from aiogram.types import (
 
 # ================== НАСТРОЙКИ ==================
 
-TOKEN = "ТВОЙ_ТОКЕН"
+TOKEN = "8514017811:AAFKyBdlLjHTVlF1ql5Axe2WUZx2l9lgnFg"
 CHANNEL_ID = "@blackrussia_85"
 
 OWNER_ID = 724545647
