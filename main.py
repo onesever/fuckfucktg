@@ -7,10 +7,7 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.types import (
-    ReplyKeyboardMarkup, InlineKeyboardMarkup,
-    InlineKeyboardButton, InputMediaPhoto
-)
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 
 # ================== НАСТРОЙКИ ==================
 
@@ -125,33 +122,57 @@ async def check_subscription(user_id):
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     args = message.get_args()
-    referrer = int(args) if args.isdigit() else None
+    user = message.from_user
+    user_id = user.id
 
-    cursor.execute("SELECT * FROM users WHERE user_id=?", (message.from_user.id,))
-    user = cursor.fetchone()
-
-    if not user:
-        cursor.execute(
-            "INSERT INTO users (user_id, referrer) VALUES (?, ?)",
-            (message.from_user.id, referrer)
-        )
-        conn.commit()
-
-        if referrer and referrer != message.from_user.id:
-            cursor.execute(
-                "UPDATE users SET referrals = referrals + 1 WHERE user_id=?",
-                (referrer,)
-            )
-            conn.commit()
-
-    if not await check_subscription(message.from_user.id):
+    # Проверка подписки
+    if not await check_subscription(user_id):
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("📢 Подписаться", url=CHANNEL_LINK)
         )
-        await message.answer("❗ Для работы подпишитесь на канал.", reply_markup=kb)
+        await message.answer(
+            "❌ Для использования бота необходимо подписаться на канал.",
+            reply_markup=kb
+        )
         return
 
-    await message.answer("👋 Добро пожаловать!", reply_markup=main_kb)
+    # Проверяем есть ли пользователь в базе
+    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+    user_exists = cursor.fetchone()
+
+    if not user_exists:
+        referrer_id = None
+
+        # Если есть реферальный аргумент
+        if args and args.isdigit():
+            possible_ref = int(args)
+
+            # Нельзя пригласить самого себя
+            if possible_ref != user_id:
+                cursor.execute("SELECT user_id FROM users WHERE user_id=?", (possible_ref,))
+                if cursor.fetchone():
+                    referrer_id = possible_ref
+
+        # Добавляем пользователя
+        cursor.execute(
+            "INSERT INTO users (user_id, referrer, referrals, last_post) VALUES (?, ?, 0, 0)",
+            (user_id, referrer_id)
+        )
+
+        # Засчитываем реферала ТОЛЬКО если есть валидный реферер
+        if referrer_id:
+            cursor.execute(
+                "UPDATE users SET referrals = referrals + 1 WHERE user_id=?",
+                (referrer_id,)
+            )
+
+        conn.commit()
+
+    await message.answer(
+        "👋 Добро пожаловать!\n\n"
+        "Вы можете подать объявление.",
+        reply_markup=main_kb
+    )
 
 # ================== ПОМОЩЬ ==================
 
@@ -389,9 +410,9 @@ async def moderate(call: types.CallbackQuery):
             await bot.send_media_group(CHANNEL_USERNAME, media)
         else:
             await bot.send_message(CHANNEL_USERNAME, ad["channel_text"])
-        status_text = "ОДОБРЕНО"
+        status_text = "approved"
     else:
-        status_text = "ОТКЛОНЕНО"
+        status_text = "rejected"
 
     cursor.execute("UPDATE ads SET status=? WHERE id=?", (status_text, ad_id))
     conn.commit()
@@ -399,7 +420,7 @@ async def moderate(call: types.CallbackQuery):
     for mid in MODERATORS:
         await bot.send_message(
             mid,
-            f"📌 Объявление №{ad_id} {status_text}\n"
+            f"📌 Объявление №{ad_id} {status_text.upper()}\n"
             f"👮 {call.from_user.full_name}"
         )
 
