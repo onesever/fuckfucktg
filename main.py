@@ -118,7 +118,9 @@ async def check_subscription(user_id):
         member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "creator", "administrator"]
     except:
-        return False# ================== START ==================
+        return False
+
+# ================== START ==================
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
@@ -157,11 +159,13 @@ async def start(message: types.Message):
 async def help_msg(message: types.Message):
     await message.answer(
         "📌 <b>Как подать объявление</b>\n\n"
-        "1️⃣ Нажмите «Опубликовать объявление»\n"
-        "2️⃣ Напишите текст\n"
-        "3️⃣ Добавьте фото (по желанию)\n"
-        "4️⃣ Подтвердите\n\n"
-        "⚠️ Обязательно должен быть указан ваш @username",
+        "1️⃣ Опубликовать объявление\n"
+        "2️⃣ Написать текст\n"
+        "3️⃣ Добавить фото (по желанию)\n"
+        "4️⃣ Подтвердить\n\n"
+        "📌 Пример:\n"
+        "Продам дом\nЦена: 17кк\nСвязь: @username\n\n"
+        "⚠️ Обязательно указать @username",
         reply_markup=main_kb
     )
 
@@ -196,16 +200,26 @@ async def referrals(message: types.Message):
     top = cursor.fetchall()
 
     top_text = ""
-    for i, user in enumerate(top, start=1):
-        top_text += f"{i}. {user[0]} — {user[1]} человек\n"
+    for i, (uid, rcount) in enumerate(top, start=1):
+        try:
+            u = await bot.get_chat(uid)
+            uname = f"@{u.username}" if u.username else u.full_name
+        except:
+            uname = str(uid)
+        top_text += f"{i}. {uname} — {rcount} человек\n"
 
     await message.answer(
         f"<b>🎁 Реферальная система</b>\n\n"
-        f"Ваш уровень: {level}\n"
+        f"<b>Уровни:</b>\n"
+        f"👤 Новичок — до 29 человек — КД 2ч 30м\n"
+        f"🔥 Активный селлер — 30 человек — КД 1ч 30м\n"
+        f"🏆 Топ селлер — 100 человек — КД 30м + ⭐ в посте\n\n"
+        f"<b>Ваш уровень:</b> {level}\n"
         f"Приглашено: {refs} человек\n"
         f"Ваш КД: {format_time(cooldown)}\n\n"
-        f"Ваша ссылка:\nhttps://t.me/{BOT_USERNAME}?start={message.from_user.id}\n\n"
-        f"<b>🏆 Топ 10</b>\n{top_text}",
+        f"<b>Ваша ссылка:</b>\n"
+        f"https://t.me/{BOT_USERNAME}?start={message.from_user.id}\n\n"
+        f"<b>🏆 Топ 10:</b>\n{top_text}",
         reply_markup=main_kb
     )
 
@@ -233,8 +247,10 @@ async def start_ad(message: types.Message):
         return
 
     await message.answer(
-        "✍️ Отправьте текст объявления.\n\n"
-        "⚠️ В тексте должен быть ваш @username",
+        "✍️ <b>Подача объявления</b>\n\n"
+        "Отправьте текст объявления одним сообщением.\n\n"
+        "📌 Пример:\n"
+        "Продам дом\nЦена: 17кк\nСвязь: @username",
         reply_markup=types.ReplyKeyboardRemove()
     )
     await AdForm.text.set()
@@ -295,27 +311,34 @@ async def confirm(call: types.CallbackQuery, state: FSMContext):
     conn.commit()
     ad_id = cursor.lastrowid
 
-    cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user.id,))
-    refs = cursor.fetchone()[0]
-    badge = "\n⭐ Топ селлер" if refs >= 100 else ""
+    user_tag = f"@{user.username}" if user.username else "без username"
 
-    caption = f"🆕 Объявление №{ad_id}{badge}\n\n{data['text']}"
+    mod_caption = (
+        f"🆕 <b>Объявление №{ad_id}</b>\n"
+        f"👤 {user.full_name}\n"
+        f"🔗 {user_tag}\n"
+        f"🆔 {user.id}\n\n"
+        f"{data['text']}"
+    )
+
+    channel_text = data["text"]
 
     pending_ads[ad_id] = {
         "user": user,
-        "text": caption,
+        "channel_text": channel_text,
+        "mod_text": mod_caption,
         "photos": data["photos"]
     }
 
     for mid in MODERATORS:
         if data["photos"]:
-            media = [InputMediaPhoto(data["photos"][0], caption=caption)]
+            media = [InputMediaPhoto(data["photos"][0], caption=mod_caption)]
             for p in data["photos"][1:]:
                 media.append(InputMediaPhoto(p))
             await bot.send_media_group(mid, media)
             await bot.send_message(mid, "⬆️ Модерация", reply_markup=moderation_kb(ad_id))
         else:
-            await bot.send_message(mid, caption, reply_markup=moderation_kb(ad_id))
+            await bot.send_message(mid, mod_caption, reply_markup=moderation_kb(ad_id))
 
     cursor.execute("UPDATE users SET last_post=? WHERE user_id=?",
                    (int(time.time()), user.id))
@@ -358,16 +381,17 @@ async def moderate(call: types.CallbackQuery):
 
     processed_ads.add(ad_id)
 
-    status_text = "ОДОБРЕНО" if action == "approve" else "ОТКЛОНЕНО"
-
     if action == "approve":
         if ad["photos"]:
-            media = [InputMediaPhoto(ad["photos"][0], caption=ad["text"])]
+            media = [InputMediaPhoto(ad["photos"][0], caption=ad["channel_text"])]
             for p in ad["photos"][1:]:
                 media.append(InputMediaPhoto(p))
             await bot.send_media_group(CHANNEL_USERNAME, media)
         else:
-            await bot.send_message(CHANNEL_USERNAME, ad["text"])
+            await bot.send_message(CHANNEL_USERNAME, ad["channel_text"])
+        status_text = "ОДОБРЕНО"
+    else:
+        status_text = "ОТКЛОНЕНО"
 
     cursor.execute("UPDATE ads SET status=? WHERE id=?", (status_text, ad_id))
     conn.commit()
