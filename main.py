@@ -890,4 +890,20 @@ async def show_db_path(message: types.Message):
         f"📂 <b>Информация о БД</b>\n\n"
         f"Путь: {DB_PATH}\n"
         f"Папка существует: {'✅' if os.path.exists(DATA_DIR) else '❌'}\n"
-        f"Файл БД существует: {'✅' if
+        f"Файл БД существует: {'✅' if os.path.exists(DB_PATH) else '❌'}\n"
+        f"Размер файла: {os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0} байт"
+    )
+
+# ================= ОБРАБОТЧИКИ ОШИБОК =================
+
+@dp.errors_handler()
+async def errors_handler(update, exception):
+    """Глобальный обработчик ошибок"""
+    logging.error(f"Ошибка: {exception} | Update: {update}")
+    return True
+
+# ================= ЗАПУСК =================
+
+if __name__ == "__main__":
+    logging.info("Бот запущен...")
+    executor.start_polling(dp, skip_updates=True)
