@@ -7,9 +7,12 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from aiogram.types import (
+    ReplyKeyboardMarkup, InlineKeyboardMarkup,
+    InlineKeyboardButton, InputMediaPhoto
+)
 
-# ================== НАСТРОЙКИ ==================
+# ================= НАСТРОЙКИ =================
 
 TOKEN = "8514017811:AAFKyBdlLjHTVlF1ql5Axe2WUZx2l9lgnFg"
 CHANNEL_USERNAME = "@blackrussia_85"
@@ -17,7 +20,6 @@ CHANNEL_LINK = "https://t.me/blackrussia_85"
 BOT_USERNAME = "blackrussia85_bot"
 
 OWNER_ID = 724545647
-OWNER_USERNAME = "@onesever"
 
 MODERATORS = [
     724545647,
@@ -30,11 +32,19 @@ MODERATORS = [
 
 MAX_PHOTOS = 5
 
+# Уровни (в секундах)
+COOLDOWN_NEWBIE = 2 * 60 * 60 + 30 * 60      # 2ч 30м
+COOLDOWN_ACTIVE = 1 * 60 * 60 + 30 * 60     # 1ч 30м
+COOLDOWN_TOP = 30 * 60                      # 30м
+
+# ================= INIT =================
+
 logging.basicConfig(level=logging.INFO)
+
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# ================== DATABASE ==================
+# ================= DATABASE =================
 
 conn = sqlite3.connect("database.db")
 cursor = conn.cursor()
@@ -42,8 +52,8 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    referrer INTEGER,
     referrals INTEGER DEFAULT 0,
+    invited_by INTEGER,
     last_post INTEGER DEFAULT 0
 )
 """)
@@ -58,7 +68,7 @@ CREATE TABLE IF NOT EXISTS ads (
 
 conn.commit()
 
-# ================== FSM ==================
+# ================= FSM =================
 
 class AdForm(StatesGroup):
     text = State()
@@ -66,17 +76,24 @@ class AdForm(StatesGroup):
     photos = State()
     confirm = State()
 
-# ================== ПАМЯТЬ ==================
+# ================= STORAGE =================
 
 pending_ads = {}
 processed_ads = set()
 
-# ================== КНОПКИ ==================
+# ================= КЛАВИАТУРЫ =================
 
 main_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 main_kb.add("📢 Опубликовать объявление")
+main_kb.add("🎁 Рефералы")
 main_kb.add("📖 Помощь", "📞 Связь с владельцем")
-main_kb.add("👮 Модераторы", "🎁 Рефералы")
+main_kb.add("👮 Модераторы")
+
+subscribe_kb = InlineKeyboardMarkup().add(
+    InlineKeyboardButton("📢 Подписаться", url=CHANNEL_LINK)
+).add(
+    InlineKeyboardButton("✅ Я подписался", callback_data="check_sub")
+)
 
 ask_photo_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 ask_photo_kb.add("➕ Добавить фото", "➡️ Без фото")
@@ -95,107 +112,114 @@ def moderation_kb(ad_id):
         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{ad_id}")
     )
 
-# ================== УТИЛИТЫ ==================
+def subscribe_post_kb():
+    return InlineKeyboardMarkup().add(
+        InlineKeyboardButton(
+            "📢 Подписаться на Б/У рынок IZHEVSK",
+            url=CHANNEL_LINK
+        )
+    )
+
+# ================= УТИЛИТЫ =================
+
+def format_time(sec):
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    return f"{h}ч {m}м" if h else f"{m}м"
 
 def get_level(refs):
     if refs >= 100:
-        return "🏆 Топ селлер", 30 * 60
+        return "🏆 <b>ТОП СЕЛЛЕР</b>", COOLDOWN_TOP
     elif refs >= 30:
-        return "🔥 Активный селлер", 90 * 60
+        return "🔥 <b>АКТИВНЫЙ СЕЛЛЕР</b>", COOLDOWN_ACTIVE
     else:
-        return "👤 Новичок", 150 * 60
-
-def format_time(seconds):
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    return f"{hours} ч {minutes} мин"
+        return None, COOLDOWN_NEWBIE
 
 async def check_subscription(user_id):
     try:
         member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "creator", "administrator"]
+        return member.status in ["member", "administrator", "creator"]
     except:
         return False
 
-# ================== START ==================
+# ================= START =================
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     args = message.get_args()
-    user = message.from_user
-    user_id = user.id
+    user_id = message.from_user.id
 
-    # Проверка подписки
-    if not await check_subscription(user_id):
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("📢 Подписаться", url=CHANNEL_LINK)
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user = cursor.fetchone()
+
+    if not user:
+        invited_by = None
+        if args.isdigit():
+            inviter = int(args)
+            if inviter != user_id:
+                invited_by = inviter
+
+        cursor.execute(
+            "INSERT INTO users (user_id, invited_by) VALUES (?, ?)",
+            (user_id, invited_by)
         )
+        conn.commit()
+
+    if not await check_subscription(user_id):
         await message.answer(
-            "❌ Для использования бота необходимо подписаться на канал.",
-            reply_markup=kb
+            "❌ Для использования бота подпишитесь на канал:",
+            reply_markup=subscribe_kb
         )
         return
 
-    # Проверяем есть ли пользователь в базе
-    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
-    user_exists = cursor.fetchone()
+    await message.answer("Добро пожаловать!", reply_markup=main_kb)
 
-    if not user_exists:
-        referrer_id = None
+@dp.callback_query_handler(lambda c: c.data == "check_sub")
+async def check_sub(call: types.CallbackQuery):
+    user_id = call.from_user.id
 
-        # Если есть реферальный аргумент
-        if args and args.isdigit():
-            possible_ref = int(args)
+    if not await check_subscription(user_id):
+        await call.answer("Вы ещё не подписаны.", show_alert=True)
+        return
 
-            # Нельзя пригласить самого себя
-            if possible_ref != user_id:
-                cursor.execute("SELECT user_id FROM users WHERE user_id=?", (possible_ref,))
-                if cursor.fetchone():
-                    referrer_id = possible_ref
+    cursor.execute("SELECT invited_by FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
 
-        # Добавляем пользователя
+    if row and row[0]:
+        inviter = row[0]
         cursor.execute(
-            "INSERT INTO users (user_id, referrer, referrals, last_post) VALUES (?, ?, 0, 0)",
-            (user_id, referrer_id)
+            "UPDATE users SET referrals = referrals + 1 WHERE user_id=?",
+            (inviter,)
         )
-
-        # Засчитываем реферала ТОЛЬКО если есть валидный реферер
-        if referrer_id:
-            cursor.execute(
-                "UPDATE users SET referrals = referrals + 1 WHERE user_id=?",
-                (referrer_id,)
-            )
-
+        cursor.execute(
+            "UPDATE users SET invited_by=NULL WHERE user_id=?",
+            (user_id,)
+        )
         conn.commit()
 
-    await message.answer(
-        "👋 Добро пожаловать!\n\n"
-        "Вы можете подать объявление.",
-        reply_markup=main_kb
-    )
+    await call.message.delete()
+    await call.message.answer("✅ Подписка подтверждена!", reply_markup=main_kb)
+    # ================= ИНФО =================
 
-# ================== ПОМОЩЬ ==================
-
-@dp.message_handler(text="📖 Помощь")
+@dp.message_handler(lambda m: m.text == "📖 Помощь")
 async def help_msg(message: types.Message):
     await message.answer(
         "📌 <b>Как подать объявление</b>\n\n"
-        "1️⃣ Опубликовать объявление\n"
-        "2️⃣ Написать текст\n"
-        "3️⃣ Добавить фото (по желанию)\n"
-        "4️⃣ Подтвердить\n\n"
-        "📌 Пример:\n"
-        "Продам дом\nЦена: 17кк\nСвязь: @username\n\n"
-        "⚠️ Обязательно указать @username",
+        "1️⃣ Нажмите «Опубликовать объявление»\n"
+        "2️⃣ Отправьте текст\n"
+        "3️⃣ Добавьте фото (по желанию)\n"
+        "4️⃣ Подтвердите\n\n"
+        "⚠️ В объявлении ОБЯЗАТЕЛЬНО должен быть указан ваш @username\n"
+        "⏳ КД зависит от вашего уровня",
         reply_markup=main_kb
     )
 
-@dp.message_handler(text="📞 Связь с владельцем")
-async def owner(message: types.Message):
-    await message.answer(f"👑 Владелец: {OWNER_USERNAME}", reply_markup=main_kb)
+@dp.message_handler(lambda m: m.text == "📞 Связь с владельцем")
+async def owner_contact(message: types.Message):
+    await message.answer("👑 Владелец: @onesever", reply_markup=main_kb)
 
-@dp.message_handler(text="👮 Модераторы")
-async def mods(message: types.Message):
+@dp.message_handler(lambda m: m.text == "👮 Модераторы")
+async def moderators_list(message: types.Message):
     await message.answer(
         "👮 <b>Модераторы</b>\n\n"
         "👑 @onesever\n"
@@ -207,234 +231,256 @@ async def mods(message: types.Message):
         reply_markup=main_kb
     )
 
-# ================== РЕФЕРАЛЫ ==================
+# ================= ПОДАЧА =================
 
-@dp.message_handler(text="🎁 Рефералы")
-async def referrals(message: types.Message):
-    cursor.execute("SELECT referrals FROM users WHERE user_id=?", (message.from_user.id,))
-    row = cursor.fetchone()
-    refs = row[0] if row else 0
+@dp.message_handler(lambda m: m.text == "📢 Опубликовать объявление")
+async def create_ad(message: types.Message):
+    user_id = message.from_user.id
 
-    level, cooldown = get_level(refs)
-
-    cursor.execute("SELECT user_id, referrals FROM users ORDER BY referrals DESC LIMIT 10")
-    top = cursor.fetchall()
-
-    top_text = ""
-    for i, (uid, rcount) in enumerate(top, start=1):
-        try:
-            u = await bot.get_chat(uid)
-            uname = f"@{u.username}" if u.username else u.full_name
-        except:
-            uname = str(uid)
-        top_text += f"{i}. {uname} — {rcount} человек\n"
-
-    await message.answer(
-        f"<b>🎁 Реферальная система</b>\n\n"
-        f"<b>Уровни:</b>\n"
-        f"👤 Новичок — до 29 человек — КД 2ч 30м\n"
-        f"🔥 Активный селлер — 30 человек — КД 1ч 30м\n"
-        f"🏆 Топ селлер — 100 человек — КД 30м + ⭐ в посте\n\n"
-        f"<b>Ваш уровень:</b> {level}\n"
-        f"Приглашено: {refs} человек\n"
-        f"Ваш КД: {format_time(cooldown)}\n\n"
-        f"<b>Ваша ссылка:</b>\n"
-        f"https://t.me/{BOT_USERNAME}?start={message.from_user.id}\n\n"
-        f"<b>🏆 Топ 10:</b>\n{top_text}",
-        reply_markup=main_kb
-    )
-
-# ================== ПОДАЧА ==================
-
-@dp.message_handler(text="📢 Опубликовать объявление")
-async def start_ad(message: types.Message):
-    if not await check_subscription(message.from_user.id):
-        await message.answer("❗ Подпишитесь на канал.")
+    if not await check_subscription(user_id):
+        await message.answer("❌ Нужно быть подписанным на канал.")
         return
 
-    cursor.execute("SELECT referrals, last_post FROM users WHERE user_id=?",
-                   (message.from_user.id,))
-    row = cursor.fetchone()
-    if not row:
-        return
+    cursor.execute("SELECT referrals, last_post FROM users WHERE user_id=?", (user_id,))
+    refs, last_post = cursor.fetchone()
 
-    refs, last_post = row
-    level, cooldown = get_level(refs)
+    level_tag, cooldown = get_level(refs)
 
     now = int(time.time())
     if now - last_post < cooldown:
-        wait = cooldown - (now - last_post)
-        await message.answer(f"⏳ Подождите {format_time(wait)}", reply_markup=main_kb)
+        left = cooldown - (now - last_post)
+        await message.answer(f"⏳ Подождите {format_time(left)}")
         return
 
     await message.answer(
-        "✍️ <b>Подача объявления</b>\n\n"
-        "Отправьте текст объявления одним сообщением.\n\n"
+        "✍️ <b>Введите текст объявления</b>\n\n"
         "📌 Пример:\n"
-        "Продам дом\nЦена: 17кк\nСвязь: @username",
+        "Продам дом в Бусаево\n"
+        "Цена: 17кк\n"
+        "Связь: @username\n\n"
+        "⚠️ Username обязателен!",
         reply_markup=types.ReplyKeyboardRemove()
     )
     await AdForm.text.set()
 
 @dp.message_handler(state=AdForm.text)
-async def get_text(message: types.Message, state: FSMContext):
-    if "@" not in message.text:
-        await message.answer("❗ Укажите ваш @username в тексте.")
+async def ad_text(message: types.Message, state: FSMContext):
+    if not message.from_user.username:
+        await message.answer("❌ У вас нет username в Telegram.")
+        return
+
+    if f"@{message.from_user.username}" not in message.text:
+        await message.answer("❌ В тексте должен быть указан именно ВАШ @username.")
         return
 
     await state.update_data(text=message.text, photos=[])
-    await message.answer("📸 Хотите добавить фото?", reply_markup=ask_photo_kb)
+    await message.answer("Добавить фото?", reply_markup=ask_photo_kb)
     await AdForm.ask_photo.set()
 
-@dp.message_handler(state=AdForm.ask_photo, text="➡️ Без фото")
-async def no_photo(message: types.Message, state: FSMContext):
-    await show_preview(message, state)
-
-@dp.message_handler(state=AdForm.ask_photo, text="➕ Добавить фото")
+@dp.message_handler(lambda m: m.text == "➕ Добавить фото", state=AdForm.ask_photo)
 async def add_photo(message: types.Message):
-    await message.answer("Отправьте до 5 фото и нажмите Готово", reply_markup=photo_done_kb)
+    await message.answer("📸 Отправьте до 5 фото. Затем нажмите «Готово».", reply_markup=photo_done_kb)
     await AdForm.photos.set()
 
-@dp.message_handler(state=AdForm.photos, content_types=types.ContentTypes.PHOTO)
-async def get_photo(message: types.Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "➡️ Без фото", state=AdForm.ask_photo)
+async def no_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    photos = data.get("photos", [])
-    if len(photos) < MAX_PHOTOS:
-        photos.append(message.photo[-1].file_id)
-        await state.update_data(photos=photos)
-
-@dp.message_handler(state=AdForm.photos, text="✅ Готово")
-async def photos_done(message: types.Message, state: FSMContext):
-    await show_preview(message, state)
-
-async def show_preview(message, state):
-    data = await state.get_data()
-
-    if data["photos"]:
-        media = [InputMediaPhoto(data["photos"][0], caption=data["text"])]
-        for p in data["photos"][1:]:
-            media.append(InputMediaPhoto(p))
-        await bot.send_media_group(message.chat.id, media)
-    else:
-        await message.answer(data["text"])
-
-    await message.answer("Подтвердите:", reply_markup=confirm_kb)
+    await message.answer(
+        f"🔍 <b>Предпросмотр</b>\n\n{data['text']}",
+        reply_markup=confirm_kb
+    )
     await AdForm.confirm.set()
 
-# ================== ПОДТВЕРЖДЕНИЕ ==================
-
-@dp.callback_query_handler(text="confirm", state=AdForm.confirm)
-async def confirm(call: types.CallbackQuery, state: FSMContext):
+@dp.message_handler(content_types=["photo"], state=AdForm.photos)
+async def handle_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
+    photos = data.get("photos", [])
+
+    if len(photos) >= MAX_PHOTOS:
+        await message.answer("❌ Максимум 5 фото.")
+        return
+
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+    await message.answer(f"Фото добавлено ({len(photos)}/{MAX_PHOTOS})")
+
+@dp.message_handler(lambda m: m.text == "✅ Готово", state=AdForm.photos)
+async def photos_done(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    await message.answer(
+        f"🔍 <b>Предпросмотр</b>\n\n{data['text']}",
+        reply_markup=confirm_kb
+    )
+    await AdForm.confirm.set()
+
+@dp.callback_query_handler(lambda c: c.data == "cancel", state=AdForm.confirm)
+async def cancel_ad(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await call.message.edit_text("❌ Подача отменена.")
+    await call.message.answer("Главное меню:", reply_markup=main_kb)
+
+@dp.callback_query_handler(lambda c: c.data == "confirm", state=AdForm.confirm)
+async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
     user = call.from_user
+    data = await state.get_data()
 
     cursor.execute("INSERT INTO ads (user_id) VALUES (?)", (user.id,))
-    conn.commit()
     ad_id = cursor.lastrowid
+    conn.commit()
 
-    user_tag = f"@{user.username}" if user.username else "без username"
+    pending_ads[ad_id] = data
+    await state.finish()
 
-    mod_caption = (
-        f"🆕 <b>Объявление №{ad_id}</b>\n"
-        f"👤 {user.full_name}\n"
-        f"🔗 {user_tag}\n"
-        f"🆔 {user.id}\n\n"
+    mod_text = (
+        f"📢 <b>Новое объявление №{ad_id}</b>\n\n"
+        f"👤 @{user.username}\n"
+        f"🆔 ID: {user.id}\n\n"
         f"{data['text']}"
     )
 
-    channel_text = data["text"]
+    for mod in MODERATORS:
+        try:
+            await bot.send_message(mod, mod_text, reply_markup=moderation_kb(ad_id))
+        except:
+            pass
 
-    pending_ads[ad_id] = {
-        "user": user,
-        "channel_text": channel_text,
-        "mod_text": mod_caption,
-        "photos": data["photos"]
-    }
+    await call.message.edit_text("✅ Отправлено на модерацию.")
+    await call.message.answer("Главное меню:", reply_markup=main_kb)
 
-    for mid in MODERATORS:
-        if data["photos"]:
-            media = [InputMediaPhoto(data["photos"][0], caption=mod_caption)]
-            for p in data["photos"][1:]:
-                media.append(InputMediaPhoto(p))
-            await bot.send_media_group(mid, media)
-            await bot.send_message(mid, "⬆️ Модерация", reply_markup=moderation_kb(ad_id))
-        else:
-            await bot.send_message(mid, mod_caption, reply_markup=moderation_kb(ad_id))
+# ================= МОДЕРАЦИЯ =================
 
-    cursor.execute("UPDATE users SET last_post=? WHERE user_id=?",
-                   (int(time.time()), user.id))
-    conn.commit()
-
-    await state.finish()
-    await call.message.answer("✅ Отправлено на модерацию", reply_markup=main_kb)
-    await call.answer()
-
-@dp.callback_query_handler(text="cancel", state=AdForm.confirm)
-async def cancel(call: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    await call.message.delete()
-    await call.message.answer("❌ Отменено", reply_markup=main_kb)
-    await call.answer()
-
-# ================== МОДЕРАЦИЯ ==================
-
-@dp.callback_query_handler(lambda c: c.data.startswith(("approve:", "reject:")))
-async def moderate(call: types.CallbackQuery):
-    if call.from_user.id not in MODERATORS:
-        return
-
-    action, ad_id = call.data.split(":")
-    ad_id = int(ad_id)
+@dp.callback_query_handler(lambda c: c.data.startswith("approve:"))
+async def approve(call: types.CallbackQuery):
+    ad_id = int(call.data.split(":")[1])
 
     if ad_id in processed_ads:
-        await call.answer("Уже обработано", show_alert=True)
-        return
-
-    cursor.execute("SELECT status FROM ads WHERE id=?", (ad_id,))
-    row = cursor.fetchone()
-    if not row or row[0] != "pending":
-        await call.answer("Уже обработано", show_alert=True)
-        return
-
-    ad = pending_ads.get(ad_id)
-    if not ad:
+        await call.answer("Уже обработано.", show_alert=True)
         return
 
     processed_ads.add(ad_id)
 
-    if action == "approve":
-        if ad["photos"]:
-            media = [InputMediaPhoto(ad["photos"][0], caption=ad["channel_text"])]
-            for p in ad["photos"][1:]:
-                media.append(InputMediaPhoto(p))
-            await bot.send_media_group(CHANNEL_USERNAME, media)
-        else:
-            await bot.send_message(CHANNEL_USERNAME, ad["channel_text"])
-        status_text = "approved"
+    cursor.execute("SELECT user_id FROM ads WHERE id=?", (ad_id,))
+    row = cursor.fetchone()
+    if not row:
+        return
+
+    user_id = row[0]
+    data = pending_ads.get(ad_id)
+    if not data:
+        return
+
+    cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user_id,))
+    refs = cursor.fetchone()[0]
+    tag, _ = get_level(refs)
+
+    final_text = data["text"]
+    if tag:
+        final_text = f"{tag}\n\n{final_text}"
+
+    if data["photos"]:
+        media = [InputMediaPhoto(data["photos"][0], caption=final_text)]
+        for p in data["photos"][1:]:
+            media.append(InputMediaPhoto(p))
+        await bot.send_media_group(CHANNEL_USERNAME, media)
+        await bot.send_message(CHANNEL_USERNAME, "⬆️", reply_markup=subscribe_post_kb())
     else:
-        status_text = "rejected"
-
-    cursor.execute("UPDATE ads SET status=? WHERE id=?", (status_text, ad_id))
-    conn.commit()
-
-    for mid in MODERATORS:
         await bot.send_message(
-            mid,
-            f"📌 Объявление №{ad_id} {status_text.upper()}\n"
-            f"👮 {call.from_user.full_name}"
+            CHANNEL_USERNAME,
+            final_text,
+            reply_markup=subscribe_post_kb()
         )
 
-    await call.message.edit_reply_markup()
-    await call.answer("Готово")
+    cursor.execute("UPDATE ads SET status='approved' WHERE id=?", (ad_id,))
+    cursor.execute("UPDATE users SET last_post=? WHERE user_id=?", (int(time.time()), user_id))
+    conn.commit()
 
-# ================== СЕРВИС ==================
+    await bot.send_message(user_id, f"✅ Ваше объявление №{ad_id} одобрено.")
+
+    for mod in MODERATORS:
+        try:
+            await bot.send_message(
+                mod,
+                f"📌 Объявление №{ad_id} ОДОБРЕНО\n"
+                f"👮 Модератор: @{call.from_user.username}"
+            )
+        except:
+            pass
+
+    await call.message.edit_reply_markup()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("reject:"))
+async def reject(call: types.CallbackQuery):
+    ad_id = int(call.data.split(":")[1])
+
+    if ad_id in processed_ads:
+        await call.answer("Уже обработано.", show_alert=True)
+        return
+
+    processed_ads.add(ad_id)
+
+    cursor.execute("SELECT user_id FROM ads WHERE id=?", (ad_id,))
+    user_id = cursor.fetchone()[0]
+
+    cursor.execute("UPDATE ads SET status='rejected' WHERE id=?", (ad_id,))
+    conn.commit()
+
+    await bot.send_message(user_id, f"❌ Ваше объявление №{ad_id} отклонено.")
+
+    for mod in MODERATORS:
+        try:
+            await bot.send_message(
+                mod,
+                f"📌 Объявление №{ad_id} ОТКЛОНЕНО\n"
+                f"👮 Модератор: @{call.from_user.username}"
+            )
+        except:
+            pass
+
+    await call.message.edit_reply_markup()
+
+# ================= РЕФЕРАЛЫ =================
+
+@dp.message_handler(lambda m: m.text == "🎁 Рефералы")
+async def referrals(message: types.Message):
+    user_id = message.from_user.id
+
+    cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user_id,))
+    refs = cursor.fetchone()[0]
+
+    text = (
+        f"👥 Вы пригласили: {refs} человек\n\n"
+        f"🔗 Ваша ссылка:\n"
+        f"https://t.me/{BOT_USERNAME}?start={user_id}\n\n"
+        "🏅 Уровни:\n"
+        "👤 Новичок — КД 2ч 30м\n"
+        "🔥 Активный селлер (30 человек) — КД 1ч 30м\n"
+        "🏆 Топ селлер (100 человек) — КД 30м\n"
+        "⭐ Отметка в посте только у ТОП СЕЛЛЕРА\n\n"
+    )
+
+    cursor.execute("SELECT user_id, referrals FROM users ORDER BY referrals DESC LIMIT 10")
+    top = cursor.fetchall()
+
+    text += "🏆 Топ 10:\n"
+    for i, (uid, r) in enumerate(top, 1):
+        try:
+            user = await bot.get_chat(uid)
+            name = f"@{user.username}" if user.username else "Без username"
+        except:
+            name = "Неизвестно"
+        text += f"{i}. {name} — {r}\n"
+
+    await message.answer(text)
+
+# ================= АДМИН =================
 
 @dp.message_handler(commands=["users"])
-async def users_cmd(message: types.Message):
-    if message.from_user.id == OWNER_ID:
-        cursor.execute("SELECT COUNT(*) FROM users")
-        count = cursor.fetchone()[0]
-        await message.answer(f"👥 Пользователей: {count}")
+async def users_count(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    cursor.execute("SELECT COUNT(*) FROM users")
+    count = cursor.fetchone()[0]
+    await message.answer(f"👥 Пользователей: {count}")
 
 @dp.message_handler(commands=["broadcast"])
 async def broadcast(message: types.Message):
@@ -442,25 +488,18 @@ async def broadcast(message: types.Message):
         return
 
     text = message.get_args()
-    if not text:
-        await message.answer("❌ Напиши текст после команды")
-        return
-
     cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
 
-    sent = 0
-    for user in users:
+    for (uid,) in users:
         try:
-            await bot.send_message(user[0], text)
-            sent += 1
-            await asyncio.sleep(0.05)
+            await bot.send_message(uid, text)
         except:
             pass
 
-    await message.answer(f"✅ Отправлено: {sent}")
+    await message.answer("✅ Рассылка завершена.")
 
-# ================== RUN ==================
+# ================= ЗАПУСК =================
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
