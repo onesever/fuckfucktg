@@ -46,8 +46,7 @@ COOLDOWN_TOP = 30 * 60                      # 30м
 # ================= ПУТИ К БАЗЕ ДАННЫХ =================
 
 # Определяем путь к папке с данными
-DATA_DIR = "/app/data_persistent"  # для Bot-host
-# DATA_DIR = "data_persistent"     # для локального тестирования (раскомментировать если нужно)
+DATA_DIR = "/app"
 DB_PATH = os.path.join(DATA_DIR, "database.db")
 
 # Создаем папку для данных, если её нет
