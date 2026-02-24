@@ -196,7 +196,7 @@ def get_level_display(refs):
     return level
 
 def get_cooldown(refs):
-    """Получение времени кулдауна для пользователя"""
+    """Получение времени КД для пользователя"""
     _, cooldown = get_level(refs)
     return cooldown
 
@@ -378,7 +378,7 @@ async def create_ad(message: types.Message):
     if not can_post_now:
         level_name = get_level_display(refs)
         await message.answer(
-            f"⏳ <b>Кулдаун активен!</b>\n\n"
+            f"⏳ <b>КД активен!</b>\n\n"
             f"Ваш уровень: {level_name}\n"
             f"Осталось подождать: {format_time(remaining)}\n\n"
             f"Следующая публикация будет доступна через {format_time(remaining)}"
@@ -392,7 +392,7 @@ async def create_ad(message: types.Message):
     await message.answer(
         f"✍️ <b>Введите текст объявления</b>\n\n"
         f"📊 <b>Ваш статус:</b> {level_name}\n"
-        f"⏱ <b>Кулдаун:</b> {format_time(cooldown)}\n\n"
+        f"⏱ <b>КД:</b> {format_time(cooldown)}\n\n"
         f"📌 <b>Пример оформления:</b>\n"
         f"Продам дом в Бусаево\n"
         f"Цена: 17кк\n"
@@ -510,7 +510,7 @@ async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
     
     await state.finish()
     
-    # Отправляем модераторам
+    # Отправляем модераторам (ИСПРАВЛЕНО: теперь с фото)
     mod_text = (
         f"📢 <b>Новое объявление №{ad_id}</b>\n\n"
         f"👤 Автор: @{user.username}\n"
@@ -519,13 +519,26 @@ async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
         f"📝 Текст:\n{data['text']}"
     )
     
-    if data.get("photos"):
-        mod_text += f"\n\n📸 Фото: {len(data['photos'])} шт."
-    
     sent_count = 0
     for mod_id in MODERATORS:
         try:
-            await bot.send_message(mod_id, mod_text, reply_markup=get_moderation_keyboard(ad_id))
+            # Если есть фото - отправляем с фото
+            if data.get("photos"):
+                # Создаем медиагруппу для модератора
+                media_group = []
+                for i, photo_id in enumerate(data["photos"]):
+                    if i == 0:
+                        media_group.append(InputMediaPhoto(photo_id, caption=mod_text))
+                    else:
+                        media_group.append(InputMediaPhoto(photo_id))
+                
+                await bot.send_media_group(mod_id, media_group)
+                # Отправляем клавиатуру отдельно (после медиагруппы)
+                await bot.send_message(mod_id, "Действия:", reply_markup=get_moderation_keyboard(ad_id))
+            else:
+                # Если нет фото - просто текст
+                await bot.send_message(mod_id, mod_text, reply_markup=get_moderation_keyboard(ad_id))
+            
             sent_count += 1
         except Exception as e:
             logging.error(f"Не удалось отправить модератору {mod_id}: {e}")
@@ -548,7 +561,7 @@ async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
     )
     await call.message.answer("Главное меню:", reply_markup=main_kb)
     
-    logging.info(f"Объявление {ad_id} отправлено {sent_count} модераторам. Кулдаун для {user.id} обновлен.")
+    logging.info(f"Объявление {ad_id} отправлено {sent_count} модераторам. КД для {user.id} обновлен.")
 
 # ================= МОДЕРАЦИЯ =================
 
@@ -700,7 +713,7 @@ async def show_referrals(message: types.Message):
     
     refs, last_ad_time = result
     
-    # Получаем информацию об уровне и кулдауне
+    # Получаем информацию об уровне и КД
     level_name = get_level_display(refs)
     cooldown = get_cooldown(refs)
     
@@ -714,14 +727,14 @@ async def show_referrals(message: types.Message):
         status = "✅ Можно подать объявление"
         remaining_text = "уже можно"
     else:
-        status = "⏳ Кулдаун активен"
+        status = "⏳ КД активен"
         remaining_text = format_time(remaining)
     
     text = (
         f"👥 <b>Ваша реферальная статистика</b>\n\n"
         f"Приглашено: {refs} человек\n"
         f"Текущий уровень: {level_name}\n"
-        f"Кулдаун: {format_time(cooldown)}\n"
+        f"КД: {format_time(cooldown)}\n"
         f"Статус: {status}\n"
         f"Осталось: {remaining_text}\n\n"
         f"🔗 <b>Ваша реферальная ссылка:</b>\n"
@@ -839,7 +852,7 @@ async def admin_clear_ads(message: types.Message):
 
 @dp.message_handler(commands=["check_cooldown"])
 async def check_cooldown(message: types.Message):
-    """Проверка кулдауна для пользователя (для админа)"""
+    """Проверка КД для пользователя (для админа)"""
     if message.from_user.id != OWNER_ID:
         return
     
@@ -874,7 +887,7 @@ async def check_cooldown(message: types.Message):
         f"📊 <b>Информация о пользователе {check_user_id}</b>\n\n"
         f"Рефералов: {refs}\n"
         f"Уровень: {level_name}\n"
-        f"Кулдаун: {format_time(cooldown)}\n"
+        f"КД: {format_time(cooldown)}\n"
         f"Последняя подача: {last_ad_str}\n"
         f"Может подать сейчас: {'✅' if can_post_now else '❌'}\n"
         f"Осталось: {format_time(remaining) if not can_post_now else '0'}"
