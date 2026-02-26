@@ -45,8 +45,8 @@ COOLDOWN_TOP = 30 * 60                      # 30м
 
 # ================= ПУТИ К БАЗЕ ДАННЫХ =================
 
-# Определяем путь к папке с данными
-DATA_DIR = "/app"
+# Определяем путь к папке с данными (БЕЗОПАСНОЕ МЕСТО)
+DATA_DIR = "/app/data"
 DB_PATH = os.path.join(DATA_DIR, "database.db")
 
 # Создаем папку для данных, если её нет
@@ -509,7 +509,7 @@ async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
     
     await state.finish()
     
-    # Отправляем модераторам (ИСПРАВЛЕНО: теперь с фото)
+    # Отправляем модераторам
     mod_text = (
         f"📢 <b>Новое объявление №{ad_id}</b>\n\n"
         f"👤 Автор: @{user.username}\n"
@@ -517,6 +517,9 @@ async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
         f"⏱ Время подачи: {datetime.fromtimestamp(current_time).strftime('%d.%m.%Y %H:%M')}\n\n"
         f"📝 Текст:\n{data['text']}"
     )
+    
+    if data.get("photos"):
+        mod_text += f"\n\n📸 Фото: {len(data['photos'])} шт."
     
     sent_count = 0
     for mod_id in MODERATORS:
@@ -532,7 +535,7 @@ async def confirm_ad(call: types.CallbackQuery, state: FSMContext):
                         media_group.append(InputMediaPhoto(photo_id))
                 
                 await bot.send_media_group(mod_id, media_group)
-                # Отправляем клавиатуру отдельно (после медиагруппы)
+                # Отправляем клавиатуру отдельно
                 await bot.send_message(mod_id, "Действия:", reply_markup=get_moderation_keyboard(ad_id))
             else:
                 # Если нет фото - просто текст
