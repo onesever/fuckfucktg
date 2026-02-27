@@ -331,10 +331,9 @@ async def owner_contact(message: types.Message):
 async def moderators_list(message: types.Message):
     await message.answer(
         "👮 <b>Команда модераторов:</b>\n\n"
-        "👑 @onesever - Главный модератор\n"
-        "🛡️ @creatorr13\n"
-        "🛡️ @wrezx\n"
-        "🛡️ @qwixx_am\n"
+        "👑 @onesever - Владелец\n"
+        "🛡️ @insaf228_18b\n"
+        "🛡️ @Solt_1712\n"
         "🛡️ @Bob1na\n"
         "🛡️ @MensClub4\n\n"
         "Обращайтесь к ним по вопросам модерации.",
